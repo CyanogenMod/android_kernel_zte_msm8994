@@ -668,7 +668,6 @@ static int segment_info_seq_show(struct seq_file *seq, void *offset)
 			seq_putc(seq, ' ');
 	}
 
-	seq_printf(seq, ",active_logs=%u", sbi->active_logs);
 
 	return 0;
 }
