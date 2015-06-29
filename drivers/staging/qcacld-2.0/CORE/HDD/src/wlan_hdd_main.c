@@ -6636,6 +6636,7 @@ static void hdd_update_tgt_ht_cap(hdd_context_t *hdd_ctx,
     hdd_config_t *pconfig = hdd_ctx->cfg_ini;
     tSirMacHTCapabilityInfo *phtCapInfo;
     tANI_U8 mcs_set[SIZE_OF_SUPPORTED_MCS_SET];
+    uint8_t enable_tx_stbc;
 
     /* check and update RX STBC */
     if (pconfig->enableRxSTBC && !cfg->ht_rx_stbc)
@@ -6688,6 +6689,11 @@ static void hdd_update_tgt_ht_cap(hdd_context_t *hdd_ctx,
     if (pconfig->ShortGI40MhzEnable && !cfg->ht_sgi_40)
         pconfig->ShortGI40MhzEnable = cfg->ht_sgi_40;
 
+    hdd_ctx->num_rf_chains     = cfg->num_rf_chains;
+    hdd_ctx->ht_tx_stbc_supported = cfg->ht_tx_stbc;
+
+    enable_tx_stbc = pconfig->enableTxSTBC;
+
     if (pconfig->enable2x2 && (cfg->num_rf_chains == 2))
     {
         pconfig->enable2x2 = 1;
@@ -6695,7 +6701,7 @@ static void hdd_update_tgt_ht_cap(hdd_context_t *hdd_ctx,
     else
     {
         pconfig->enable2x2 = 0;
-        pconfig->enableTxSTBC = 0;
+        enable_tx_stbc = 0;
 
         /* 1x1 */
         /* Update Rx Highest Long GI data Rate */
@@ -6719,10 +6725,9 @@ static void hdd_update_tgt_ht_cap(hdd_context_t *hdd_ctx,
     }
     if (!(cfg->ht_tx_stbc && pconfig->enable2x2))
     {
-        pconfig->enableTxSTBC = 0;
+        enable_tx_stbc = 0;
     }
-    phtCapInfo->txSTBC = pconfig->enableTxSTBC;
-
+    phtCapInfo->txSTBC = enable_tx_stbc;
     val32 = val16;
     status = ccmCfgSetInt(hdd_ctx->hHal, WNI_CFG_HT_CAP_INFO,
                           val32, NULL, eANI_BOOLEAN_FALSE);
@@ -9270,13 +9275,14 @@ hdd_adapter_t* hdd_open_adapter( hdd_context_t *pHddCtx, tANI_U8 session_type,
 
   /* Enable FW logs based on INI configuration */
   if ((VOS_FTM_MODE != vos_get_conparam()) &&
-             (pHddCtx->cfg_ini->enableFwLogType))
+             (pHddCtx->cfg_ini->enablefwlog))
   {
      tANI_U8 count = 0;
      tANI_U32 value = 0;
      tANI_U8 numEntries = 0;
      tANI_U8 moduleLoglevel[FW_MODULE_LOG_LEVEL_STRING_LENGTH];
 
+     pHddCtx->fw_log_settings.dl_type = pHddCtx->cfg_ini->enableFwLogType;
      ret = process_wma_set_command( (int)pAdapter->sessionId,
                                   (int)WMI_DBGLOG_TYPE,
                                   pHddCtx->cfg_ini->enableFwLogType, DBG_CMD );
@@ -9285,6 +9291,7 @@ hdd_adapter_t* hdd_open_adapter( hdd_context_t *pHddCtx, tANI_U8 session_type,
           hddLog(LOGE, FL("Failed to enable FW log type ret %d"), ret);
      }
 
+     pHddCtx->fw_log_settings.dl_loglevel = pHddCtx->cfg_ini->enableFwLogLevel;
      ret = process_wma_set_command((int)pAdapter->sessionId,
                                    (int)WMI_DBGLOG_LOG_LEVEL,
                                    pHddCtx->cfg_ini->enableFwLogLevel, DBG_CMD);
@@ -11033,10 +11040,6 @@ void hdd_wlan_exit(hdd_context_t *pHddCtx)
 #ifdef IPA_OFFLOAD
    hdd_ipa_cleanup(pHddCtx);
 #endif
-   //Free up dynamically allocated members inside HDD Adapter
-   kfree(pHddCtx->cfg_ini);
-   pHddCtx->cfg_ini= NULL;
-
 
    /* free the power on lock from platform driver */
    if (free_riva_power_on_lock("wlan"))
@@ -11046,7 +11049,18 @@ void hdd_wlan_exit(hdd_context_t *pHddCtx)
    }
 
 free_hdd_ctx:
-   wiphy_unregister(wiphy) ;
+   /* Free up dynamically allocated members inside HDD Adapter */
+   if (pHddCtx->cfg_ini) {
+       kfree(pHddCtx->cfg_ini);
+       pHddCtx->cfg_ini= NULL;
+   }
+
+   /* FTM mode, WIPHY did not registered
+      If un-register here, system crash will happen */
+   if (VOS_FTM_MODE != hdd_get_conparam())
+   {
+      wiphy_unregister(wiphy) ;
+   }
    wiphy_free(wiphy) ;
    if (hdd_is_ssr_required())
    {
@@ -11712,8 +11726,6 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
    init_completion(&pHddCtx->standby_comp_var);
    init_completion(&pHddCtx->req_bmps_comp_var);
 
-   init_completion(&pHddCtx->linux_reg_req);
-
    spin_lock_init(&pHddCtx->schedScan_lock);
 
    hdd_list_init( &pHddCtx->hddAdapters, MAX_NUMBER_OF_ADAPTERS );
@@ -11789,10 +11801,16 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
    /*
     * cfg80211: Initialization  ...
     */
-   if (0 < wlan_hdd_cfg80211_init(dev, wiphy, pHddCtx->cfg_ini)) {
-      hddLog(VOS_TRACE_LEVEL_FATAL,
-             "%s: wlan_hdd_cfg80211_init return failure", __func__);
-      goto err_config;
+#if !defined(LINUX_QCMBR)
+   if (VOS_FTM_MODE != hdd_get_conparam())
+#endif
+   {
+      if (0 < wlan_hdd_cfg80211_init(dev, wiphy, pHddCtx->cfg_ini))
+      {
+          hddLog(VOS_TRACE_LEVEL_FATAL,
+                 "%s: wlan_hdd_cfg80211_init return failure", __func__);
+          goto err_config;
+      }
    }
 
    /* Initialize struct for saving f/w log setting will be used
@@ -12026,15 +12044,9 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
           goto err_free_ftm_open;
       }
 #endif
-      /* registration of wiphy dev with cfg80211 */
-      if (0 > wlan_hdd_cfg80211_register(wiphy)) {
-          hddLog(LOGE, FL("wiphy register failed"));
-          goto err_free_ftm_open;
-      }
       vos_set_load_unload_in_progress(VOS_MODULE_ID_VOSS, FALSE);
       pHddCtx->isLoadInProgress = FALSE;
-
-      hddLog(LOGE, FL("FTM driver loaded"));
+      hddLog(VOS_TRACE_LEVEL_FATAL,"%s: FTM driver loaded", __func__);
       complete(&wlan_start_comp);
       return VOS_STATUS_SUCCESS;
    }
@@ -13902,8 +13914,12 @@ void wlan_hdd_send_svc_nlink_msg(int type, void *data, int len)
     struct nlmsghdr *nlh;
     tAniMsgHdr *ani_hdr;
     void *nl_data = NULL;
+    int flags = GFP_KERNEL;
 
-    skb = alloc_skb(NLMSG_SPACE(WLAN_NL_MAX_PAYLOAD), GFP_KERNEL);
+    if (in_interrupt() || irqs_disabled() || in_atomic())
+        flags = GFP_ATOMIC;
+
+    skb = alloc_skb(NLMSG_SPACE(WLAN_NL_MAX_PAYLOAD), flags);
 
     if(skb == NULL) {
         VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,

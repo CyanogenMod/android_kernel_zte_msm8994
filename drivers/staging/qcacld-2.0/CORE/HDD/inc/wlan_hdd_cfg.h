@@ -1564,18 +1564,28 @@ typedef enum
 #define CFG_ENABLE_PACKET_LOG_MAX        ( 1 )
 #define CFG_ENABLE_PACKET_LOG_DEFAULT    ( 0 )
 
+/* gFwDebugLogType takes values from enum dbglog_process_t,
+ * make default value as DBGLOG_PROCESS_NET_RAW to give the
+ * logs to net link since cnss_diag service is started at boot
+ * time by default.
+ */
 #define CFG_ENABLE_FW_LOG_TYPE            "gFwDebugLogType"
 #define CFG_ENABLE_FW_LOG_TYPE_MIN        ( 0 )
 #define CFG_ENABLE_FW_LOG_TYPE_MAX        ( 255 )
-#define CFG_ENABLE_FW_LOG_TYPE_DEFAULT    ( 0 )
+#define CFG_ENABLE_FW_LOG_TYPE_DEFAULT    ( 3 )
 
-
+/* gFwDebugLogLevel takes values from enum DBGLOG_LOG_LVL,
+ * make default value as DBGLOG_ERR to enable error logs by
+ * default.
+ */
 #define CFG_ENABLE_FW_DEBUG_LOG_LEVEL          "gFwDebugLogLevel"
 #define CFG_ENABLE_FW_DEBUG_LOG_LEVEL_MIN      ( 0 )
 #define CFG_ENABLE_FW_DEBUG_LOG_LEVEL_MAX      ( 255 )
-#define CFG_ENABLE_FW_DEBUG_LOG_LEVEL_DEFAULT  ( 0 )
+#define CFG_ENABLE_FW_DEBUG_LOG_LEVEL_DEFAULT  ( 5 )
 
-
+/* For valid values of log levels check enum DBGLOG_LOG_LVL and
+ * for valid values of module ids check enum WLAN_MODULE_ID.
+ */
 #define CFG_ENABLE_FW_MODULE_LOG_LEVEL    "gFwDebugModuleLoglevel"
 #define CFG_ENABLE_FW_MODULE_LOG_DEFAULT  ""
 
@@ -2573,6 +2583,11 @@ This feature requires the dependent cfg.ini "gRoamPrefer5GHz" set to 1 */
 #define CFG_INITIAL_DWELL_TIME_MIN             (0)
 #define CFG_INITIAL_DWELL_TIME_MAX             (100)
 
+#define CFG_INITIAL_SCAN_NO_DFS_CHNL_NAME         "gInitialScanNoDFSChnl"
+#define CFG_INITIAL_SCAN_NO_DFS_CHNL_DEFAULT      (0)
+#define CFG_INITIAL_SCAN_NO_DFS_CHNL_MIN          (0)
+#define CFG_INITIAL_SCAN_NO_DFS_CHNL_MAX          (1)
+
 #define CFG_OVERRIDE_COUNTRY_CODE                "gStaCountryCode"
 #define CFG_OVERRIDE_COUNTRY_CODE_DEFAULT        "000"
 
@@ -2805,6 +2820,15 @@ This feature requires the dependent cfg.ini "gRoamPrefer5GHz" set to 1 */
 #define CFG_SAP_DOT11MC_MAX           (1)
 #define CFG_SAP_DOT11MC_DEFAULT       (0)
 
+/* Option to report rssi in cfg80211_inform_bss_frame()
+ * 0 = use rssi value based on noise floor = -96 dBm
+ * 1 = use rssi value based on actual noise floor in hardware
+ */
+#define CFG_INFORM_BSS_RSSI_RAW_NAME               "gInformBssRssiRaw"
+#define CFG_INFORM_BSS_RSSI_RAW_MIN                (0)
+#define CFG_INFORM_BSS_RSSI_RAW_MAX                (1)
+#define CFG_INFORM_BSS_RSSI_RAW_DEFAULT            (1)
+
 /*---------------------------------------------------------------------------
   Type declarations
   -------------------------------------------------------------------------*/
@@ -2954,6 +2978,7 @@ typedef struct
    v_U32_t        nActiveMaxChnTime;     //in units of milliseconds
 
    v_U32_t        nInitialDwellTime;     //in units of milliseconds
+   bool           initial_scan_no_dfs_chnl;
 
    v_U32_t        nActiveMinChnTimeBtc;     //in units of milliseconds
    v_U32_t        nActiveMaxChnTimeBtc;     //in units of milliseconds
@@ -3405,6 +3430,7 @@ typedef struct
    v_BOOL_t                    gEnableDeauthToDisassocMap;
    bool                        enable_mac_spoofing;
    uint8_t                     sap_dot11mc;
+   uint8_t                     inform_bss_rssi_raw;
 } hdd_config_t;
 
 #ifdef WLAN_FEATURE_MBSSID
@@ -3556,4 +3582,5 @@ v_VOID_t hdd_mbssid_apply_def_cfg_ini(hdd_adapter_t *pAdapter);
 #endif
 
 void print_hdd_cfg(hdd_context_t *pHddCtx);
+VOS_STATUS hdd_update_nss(hdd_context_t *hdd_ctx, uint8_t nss);
 #endif

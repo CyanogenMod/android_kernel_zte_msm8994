@@ -107,7 +107,9 @@
    This value should be larger than the timeout used by WDI to wait for
    a response from WCNSS */
 #define WLAN_WAIT_TIME_SESSIONOPENCLOSE  15000
-#define WLAN_WAIT_TIME_ABORTSCAN  2000
+#define WLAN_WAIT_TIME_ABORTSCAN  (SIR_HW_DEF_SCAN_MAX_DURATION + 1000)
+#define WLAN_WAIT_TIME_EXTSCAN  1000
+#define WLAN_WAIT_TIME_LL_STATS 5000
 
 
 /** Maximum time(ms) to wait for mc thread suspend **/
@@ -131,9 +133,6 @@
 
 /** Maximum time(ms) to wait for tdls initiator to start direct communication **/
 #define WAIT_TIME_TDLS_INITIATOR    600
-
-/* Maximum time to get linux regulatory entry settings */
-#define LINUX_REG_WAIT_TIME 300
 
 /* Scan Req Timeout */
 #define WLAN_WAIT_TIME_SCAN_REQ 100
@@ -304,7 +303,8 @@ extern spinlock_t hdd_context_lock;
 
 #define HDD_VHT_RX_HIGHEST_SUPPORTED_DATA_RATE_1_1       390
 #define HDD_VHT_TX_HIGHEST_SUPPORTED_DATA_RATE_1_1       390
-
+#define HDD_VHT_RX_HIGHEST_SUPPORTED_DATA_RATE_2_2       780
+#define HDD_VHT_TX_HIGHEST_SUPPORTED_DATA_RATE_2_2       780
 
 typedef struct hdd_tx_rx_stats_s
 {
@@ -1259,9 +1259,6 @@ struct hdd_context_s
    /* Completion  variable to indicate Mc Thread Suspended */
    struct completion mc_sus_event_var;
 
-   /* Completion variable for regulatory hint  */
-   struct completion linux_reg_req;
-
    v_BOOL_t isWlanSuspended;
 
    v_BOOL_t isTxThreadSuspended;
@@ -1492,6 +1489,12 @@ struct hdd_context_s
 
     /* Time since boot up to WiFi turn ON (in micro seconds) */
     v_U64_t wifi_turn_on_time_since_boot;
+
+    /* number of rf chains supported by target */
+    uint32_t  num_rf_chains;
+
+    /* Is htTxSTBC supported by target */
+    uint8_t   ht_tx_stbc_supported;
 };
 
 /*---------------------------------------------------------------------------

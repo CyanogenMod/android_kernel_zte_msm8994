@@ -60,6 +60,9 @@
 #define P2P_SEARCH_DWELL_TIME_INCREASE   20
 #define P2P_SOCIAL_CHANNELS              3
 
+// Maximum scan duration before timeout
+#define SIR_HW_DEF_SCAN_MAX_DURATION     30000 /* 30 secs */
+
 /* Max number of channels are 165, but to access 165th element of array,
  *array of 166 is required.
  */
@@ -727,8 +730,8 @@ typedef struct sSirBssDescription
     tANI_U16             beaconInterval;
     tANI_U16             capabilityInfo;
     tSirNwType           nwType; // Indicates 11a/b/g
-    tANI_U8              aniIndicator;
     tANI_S8              rssi;
+    tANI_S8              rssi_raw;
     tANI_S8              sinr;
     //channelId what peer sent in beacon/probersp.
     tANI_U8              channelId;
@@ -791,11 +794,11 @@ typedef struct sSirSmeStartBssRsp
     tSirResultCodes     statusCode;
     tSirBssType         bssType;//Add new type for WDS mode
     tANI_U16            beaconInterval;//Beacon Interval for both type
-    tANI_U32            staId;//Staion ID for Self
-    tSirBssDescription  bssDescription;//Peer BSS description
+    tANI_U32            staId;  /* Station ID for Self */
 #ifdef FEATURE_WLAN_MCC_TO_SCC_SWITCH
     tSirSmeHTProfile    HTProfile;
 #endif
+    tSirBssDescription  bssDescription;//Peer BSS description
 } tSirSmeStartBssRsp, *tpSirSmeStartBssRsp;
 
 
@@ -1181,10 +1184,11 @@ typedef struct sSirSmeJoinRsp
     bool tdls_chan_swit_prohibited;
 #endif
 
-    tANI_U8         frames[ 1 ];
 #ifdef FEATURE_WLAN_MCC_TO_SCC_SWITCH
     tSirSmeHTProfile    HTProfile;
 #endif
+
+    tANI_U8         frames[ 1 ];
 } tSirSmeJoinRsp, *tpSirSmeJoinRsp;
 
 /// Definition for Authentication indication from peer

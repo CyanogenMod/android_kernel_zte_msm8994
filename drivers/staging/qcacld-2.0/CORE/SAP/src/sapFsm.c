@@ -2531,14 +2531,20 @@ eHalStatus sap_CloseSession(tHalHandle hHal,
          */
          VOS_TRACE(VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_INFO_MED,
          "sapdfs: no session are valid, so clearing dfs global structure");
+        /*
+         * CAC timer will be initiated and started only when SAP starts on
+         * DFS channel and it will be stopped and destroyed immediately once the
+         * radar detected or timedout. So as per design CAC timer should be
+         * destroyed after stop.
+         */
 
         if (pMac->sap.SapDfsInfo.is_dfs_cac_timer_running)
         {
             vos_timer_stop(&pMac->sap.SapDfsInfo.sap_dfs_cac_timer);
             pMac->sap.SapDfsInfo.is_dfs_cac_timer_running = 0;
+            vos_timer_destroy(&pMac->sap.SapDfsInfo.sap_dfs_cac_timer);
         }
         pMac->sap.SapDfsInfo.cac_state = eSAP_DFS_DO_NOT_SKIP_CAC;
-        vos_timer_destroy(&pMac->sap.SapDfsInfo.sap_dfs_cac_timer);
         sap_CacResetNotify(hHal);
         vos_mem_zero(&pMac->sap, sizeof(pMac->sap));
     }
@@ -4056,6 +4062,13 @@ v_U8_t sapIndicateRadar(ptSapContext sapContext, tSirSmeDfsEventInd *dfs_event)
         return 0;
     }
 
+    /*
+     * SAP needs to generate Channel Switch IE
+     * if the radar is found in the STARTED state
+     */
+    if (eSAP_STARTED == sapContext->sapsMachine)
+        pMac->sap.SapDfsInfo.csaIERequired = VOS_TRUE;
+
     if (sapContext->csrRoamProfile.disableDFSChSwitch)
     {
        return sapContext->channel;
@@ -4063,12 +4076,6 @@ v_U8_t sapIndicateRadar(ptSapContext sapContext, tSirSmeDfsEventInd *dfs_event)
 
     /* set the Radar Found flag in SapDfsInfo */
     pMac->sap.SapDfsInfo.sap_radar_found_status = VOS_TRUE;
-
-    /* We need to generate Channel Switch IE if the radar is found in the
-     * operating state
-     */
-    if (eSAP_STARTED == sapContext->sapsMachine)
-        pMac->sap.SapDfsInfo.csaIERequired = VOS_TRUE;
 
     sapGet5GHzChannelList(sapContext);
 

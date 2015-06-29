@@ -644,6 +644,7 @@ WLANSAP_StartBss
     ptSapContext pSapCtx = NULL;
     tANI_BOOLEAN restartNeeded;
     tHalHandle hHal;
+    tpAniSirGlobal pmac = NULL;
     int ret;
 
     /*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
@@ -735,6 +736,13 @@ WLANSAP_StartBss
             }
         }
 
+        pmac = PMAC_STRUCT( hHal );
+        /*
+         * Copy the DFS Test Mode setting to pmac for
+         * access in lower layers
+         */
+        pmac->sap.SapDfsInfo.disable_dfs_ch_switch =
+                                   pConfig->disableDFSChSwitch;
         // Copy MAC filtering settings to sap context
         pSapCtx->eSapMacAddrAclMode = pConfig->SapMacaddr_acl;
         vos_mem_copy(pSapCtx->acceptMacList, pConfig->accept_mac, sizeof(pConfig->accept_mac));
@@ -1295,7 +1303,7 @@ WLANSAP_ModifyACL
                     VOS_TRACE( VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_INFO, "Delete from white list");
                     sapRemoveMacFromACL(pSapCtx->acceptMacList, &pSapCtx->nAcceptMac, staWLIndex);
                     /* If a client is deleted from white list and the client is connected, send deauth*/
-                    WLANSAP_DeauthSta(pSapCtx, pPeerStaMac);
+                    WLANSAP_DeauthSta(pCtx, pPeerStaMac);
                     VOS_TRACE( VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_INFO_LOW, "size of accept and deny lists %d %d",
                             pSapCtx->nAcceptMac, pSapCtx->nDenyMac);
                 }
@@ -1344,7 +1352,7 @@ WLANSAP_ModifyACL
                         sapRemoveMacFromACL(pSapCtx->acceptMacList, &pSapCtx->nAcceptMac, staWLIndex);
                     }
                     /* If we are adding a client to the black list; if its connected, send deauth */
-                    WLANSAP_DeauthSta(pSapCtx, pPeerStaMac);
+                    WLANSAP_DeauthSta(pCtx, pPeerStaMac);
                     VOS_TRACE( VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_INFO,
                             "... Now add to black list");
                     sapAddMacToACL(pSapCtx->denyMacList, &pSapCtx->nDenyMac, pPeerStaMac);
@@ -3327,6 +3335,8 @@ WLANSAP_UpdateSapConfigAddIE(tsap_Config_t *pConfig,
     default:
             VOS_TRACE(VOS_MODULE_ID_SME, VOS_TRACE_LEVEL_INFO,
                 FL("No matching buffer type %d"), updateType);
+            if (pBuffer != NULL)
+                vos_mem_free(pBuffer);
         break;
     }
 

@@ -527,10 +527,18 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 	rx_pkt->pkt_meta.channel = hdr->channel;
         rx_pkt->pkt_meta.scan_src = hdr->flags;
 
-	/*Get the absolute rssi value from the current rssi value
-	 *the sinr value is hardcoded into 0 in the core stack*/
+	/* Get the rssi value from the current snr value
+	 * using standard noise floor of -96.
+	 */
 	rx_pkt->pkt_meta.rssi = hdr->snr + TLSHIM_TGT_NOISE_FLOOR_DBM;
 	rx_pkt->pkt_meta.snr = hdr->snr;
+
+	/* If absolute rssi is available from firmware, use it */
+	if (hdr->rssi != 0)
+		rx_pkt->pkt_meta.rssi_raw = hdr->rssi;
+	else
+		rx_pkt->pkt_meta.rssi_raw = rx_pkt->pkt_meta.rssi;
+
 	/*
 	 * FIXME: Assigning the local timestamp as hw timestamp is not
 	 * available. Need to see if pe/lim really uses this data.
@@ -592,6 +600,12 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 #else
 	adf_os_mem_copy(wh, param_tlvs->bufp, hdr->buf_len);
 #endif
+
+	TLSHIM_LOGD(
+		"%s: BSSID: "MAC_ADDRESS_STR" snr = %d, rssi = %d, rssi_raw = %d",
+			__func__, MAC_ADDR_ARRAY(wh->i_addr3),
+			hdr->snr, rx_pkt->pkt_meta.rssi,
+			rx_pkt->pkt_meta.rssi_raw);
 
 	if (!tl_shim->mgmt_rx) {
 		TLSHIM_LOGE("Not registered for Mgmt rx, dropping the frame");
@@ -753,6 +767,11 @@ static int tlshim_mgmt_rx_wmi_handler(void *context, u_int8_t *data,
 							   vos_ctx);
 	VOS_STATUS ret = VOS_STATUS_SUCCESS;
 
+	if (vos_is_logp_in_progress(VOS_MODULE_ID_TL, NULL)) {
+			TLSHIM_LOGE("%s: LOPG in progress\n", __func__);
+			return (-1);
+	}
+
 	adf_os_spin_lock_bh(&tl_shim->mgmt_lock);
 	ret = tlshim_mgmt_rx_process(context, data, data_len, FALSE, 0);
 	adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
@@ -853,16 +872,10 @@ static void tlshim_data_rx_cb(struct txrx_tl_shim_ctx *tl_shim,
 	} else
 		adf_os_spin_unlock_bh(&tl_shim->bufq_lock);
 
-	buf = buf_list;
-	while (buf) {
-		next_buf = adf_nbuf_queue_next(buf);
-		adf_nbuf_set_next(buf, NULL); /* Add NULL terminator */
-		ret = data_rx(vos_ctx, buf, staid);
-		if (ret != VOS_STATUS_SUCCESS) {
-			TLSHIM_LOGE("Frame Rx to HDD failed");
-			adf_nbuf_free(buf);
-		}
-		buf = next_buf;
+	ret = data_rx(vos_ctx, buf_list, staid);
+	if (ret != VOS_STATUS_SUCCESS) {
+		TLSHIM_LOGE("Frame Rx to HDD failed");
+		goto free_buf;
 	}
 	return;
 
@@ -1600,7 +1613,9 @@ VOS_STATUS WLANTL_ChangeSTAState(void *vos_ctx, u_int8_t sta_id,
 	peer = ol_txrx_peer_find_by_local_id(
 			((pVosContextType) vos_ctx)->pdev_txrx_ctx,
 			sta_id);
-	if (!peer)
+
+	if ((peer == NULL) ||
+                (adf_os_atomic_read(&peer->delete_in_progress) == 1))
 		return VOS_STATUS_E_FAULT;
 
 	if (sta_state == WLANTL_STA_CONNECTED)

@@ -139,7 +139,6 @@
 #define WMA_HOST_ROAM_SCAN_REQID_PREFIX  0xA800
 /* Prefix used by scan requestor id on host */
 #define WMA_HOST_SCAN_REQUESTOR_ID_PREFIX 0xA000
-#define WMA_HW_DEF_SCAN_MAX_DURATION	  30000 /* 30 secs */
 
 /* Max offchannel duration */
 #define WMA_BURST_SCAN_MAX_NUM_OFFCHANNELS  (3)
@@ -372,6 +371,7 @@ typedef struct {
 	u_int32_t ani_ofdm_level;
 	u_int32_t ani_cck_level;
 	u_int32_t cwmenable;
+	u_int32_t cts_cbw;
 	u_int32_t txchainmask;
 	u_int32_t rxchainmask;
 	u_int32_t txpow2g;
@@ -1118,6 +1118,7 @@ u_int16_t get_regdmn_5g(u_int32_t reg_dmn);
 #define WMA_FW_TX_PPDU_STATS	0x4
 #define WMA_FW_TX_CONCISE_STATS 0x5
 #define WMA_FW_TX_RC_STATS	0x6
+#define WMA_FW_RX_REM_RING_BUF 0xc
 
 /*
  * Setting the Tx Comp Timeout to 1 secs.

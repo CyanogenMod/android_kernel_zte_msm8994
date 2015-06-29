@@ -1294,7 +1294,8 @@ if (limPopulateMatchingRateSet(pMac,
                              subType, true, authType, peerIdx, true,
                              (tSirResultCodes) eSIR_MAC_UNSPEC_FAILURE_STATUS, psessionEntry);
 
-        pAssocReq = psessionEntry->parsedAssocReq[pStaDs->assocId];
+        if(psessionEntry->parsedAssocReq)
+            pAssocReq = psessionEntry->parsedAssocReq[pStaDs->assocId];
         goto error;
     }
 
@@ -1384,9 +1385,6 @@ if (limPopulateMatchingRateSet(pMac,
     // Re/Assoc Response frame to requesting STA
     pStaDs->mlmStaContext.subType = subType;
 
-    if (pAssocReq->propIEinfo.aniIndicator)
-        pStaDs->aniPeer = 1;
-
 #ifdef WLAN_FEATURE_11W
     pStaDs->rmfEnabled = (pmfConnection) ? 1 : 0;
     pStaDs->pmfSaQueryState = DPH_SA_QUERY_NOT_IN_PROGRESS;
@@ -1443,7 +1441,8 @@ if (limPopulateMatchingRateSet(pMac,
     }
 
     // BTAMP: Storing the parsed assoc request in the psessionEntry array
-    psessionEntry->parsedAssocReq[pStaDs->assocId] = pAssocReq;
+    if(psessionEntry->parsedAssocReq)
+        psessionEntry->parsedAssocReq[pStaDs->assocId] = pAssocReq;
     assoc_req_copied = true;
 
     /* BTAMP: If STA context already exist (ie. updateContext = 1)
@@ -1469,7 +1468,8 @@ if (limPopulateMatchingRateSet(pMac,
                                   true, pStaDs->mlmStaContext.authType, pStaDs->assocId, true,
                                   (tSirResultCodes) eSIR_MAC_UNSPEC_FAILURE_STATUS, psessionEntry);
 
-            pAssocReq = psessionEntry->parsedAssocReq[pStaDs->assocId];
+            if(psessionEntry->parsedAssocReq)
+                pAssocReq = psessionEntry->parsedAssocReq[pStaDs->assocId];
             goto error;
         }
     }
@@ -1493,7 +1493,8 @@ if (limPopulateMatchingRateSet(pMac,
 
                 //Restoring the state back.
                 pStaDs->mlmStaContext.mlmState = mlmPrevState;
-                pAssocReq = psessionEntry->parsedAssocReq[pStaDs->assocId];
+                if(psessionEntry->parsedAssocReq)
+                    pAssocReq = psessionEntry->parsedAssocReq[pStaDs->assocId];
                 goto error;
             }
         }
@@ -1510,7 +1511,9 @@ if (limPopulateMatchingRateSet(pMac,
 
                     //Restoring the state back.
                     pStaDs->mlmStaContext.mlmState = mlmPrevState;
-                    pAssocReq = psessionEntry->parsedAssocReq[pStaDs->assocId];
+                    if(psessionEntry->parsedAssocReq)
+                        pAssocReq =
+                            psessionEntry->parsedAssocReq[pStaDs->assocId];
                     goto error;
             }
 
@@ -1541,7 +1544,8 @@ error:
         }
         vos_mem_free(pAssocReq);
         if (assoc_req_copied) /* to avoid double free */
-            psessionEntry->parsedAssocReq[pStaDs->assocId] = NULL;
+            if(psessionEntry->parsedAssocReq)
+                psessionEntry->parsedAssocReq[pStaDs->assocId] = NULL;
     }
 
     /* If it is not duplicate Assoc request then only free the memory */
@@ -1829,9 +1833,6 @@ void limSendMlmAssocInd(tpAniSirGlobal pMac, tpDphHashNode pStaDs, tpPESession p
         pMlmReassocInd->authType = pStaDs->mlmStaContext.authType;
         vos_mem_copy((tANI_U8 *)&pMlmReassocInd->ssId,
                      (tANI_U8 *)&(pAssocReq->ssId), pAssocReq->ssId.length + 1);
-
-        if (pAssocReq->propIEinfo.aniIndicator)
-            pStaDs->aniPeer = 1;
 
         pMlmReassocInd->capabilityInfo = pAssocReq->capabilityInfo;
         pMlmReassocInd->rsnIE.length = 0;

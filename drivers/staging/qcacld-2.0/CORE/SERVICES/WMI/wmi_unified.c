@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2015 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -48,6 +48,10 @@
 #include "if_pci.h"
 #elif defined(HIF_USB)
 #include "if_usb.h"
+#endif
+
+#if defined(QCA_WIFI_2_0) && !defined(QCA_WIFI_ISOC) && defined(CONFIG_CNSS)
+#include <net/cnss.h>
 #endif
 
 #define WMI_MIN_HEAD_ROOM 64
@@ -124,7 +128,7 @@ wmi_buf_alloc(wmi_unified_t wmi_handle, u_int16_t len)
 	wmi_buf_t wmi_buf;
 
 	if (roundup(len + WMI_MIN_HEAD_ROOM, 4) >
-				WMI_MAX_LEN_BYTES) {
+				wmi_handle->max_msg_len) {
 		VOS_ASSERT(0);
 		return NULL;
 	}
@@ -230,6 +234,7 @@ static u_int8_t* get_wmi_cmd_string(WMI_CMD_ID wmi_command)
 
 		CASE_RETURN_STRING(WMI_VDEV_PLMREQ_START_CMDID);
 		CASE_RETURN_STRING(WMI_VDEV_PLMREQ_STOP_CMDID);
+		CASE_RETURN_STRING(WMI_VDEV_TSF_TSTAMP_ACTION_CMDID);
 
 		/* peer specific commands */
 
@@ -582,6 +587,7 @@ static u_int8_t* get_wmi_cmd_string(WMI_CMD_ID wmi_command)
 		CASE_RETURN_STRING(WMI_EXTSCAN_GET_WLAN_CHANGE_RESULTS_CMDID);
 		CASE_RETURN_STRING(WMI_EXTSCAN_SET_CAPABILITIES_CMDID);
 		CASE_RETURN_STRING(WMI_EXTSCAN_GET_CAPABILITIES_CMDID);
+		CASE_RETURN_STRING(WMI_EXTSCAN_CONFIGURE_HOTLIST_SSID_MONITOR_CMDID);
 		CASE_RETURN_STRING(WMI_ROAM_SYNCH_COMPLETE);
 		CASE_RETURN_STRING(WMI_D0_WOW_ENABLE_DISABLE_CMDID);
 		CASE_RETURN_STRING(WMI_EXTWOW_ENABLE_CMDID);
@@ -604,9 +610,28 @@ static u_int8_t* get_wmi_cmd_string(WMI_CMD_ID wmi_command)
 		CASE_RETURN_STRING(WMI_SET_ANTENNA_DIVERSITY_CMDID);
 		CASE_RETURN_STRING(WMI_SAP_OFL_ENABLE_CMDID);
 		CASE_RETURN_STRING(WMI_APFIND_CMDID);
+		CASE_RETURN_STRING(WMI_PASSPOINT_LIST_CONFIG_CMDID);
+		CASE_RETURN_STRING(WMI_OCB_SET_SCHED_CMDID);
+		CASE_RETURN_STRING(WMI_OCB_SET_CONFIG_CMDID);
+		CASE_RETURN_STRING(WMI_OCB_SET_UTC_TIME_CMDID);
+		CASE_RETURN_STRING(WMI_OCB_START_TIMING_ADVERT_CMDID);
+		CASE_RETURN_STRING(WMI_OCB_STOP_TIMING_ADVERT_CMDID);
+		CASE_RETURN_STRING(WMI_OCB_GET_TSF_TIMER_CMDID);
+		CASE_RETURN_STRING(WMI_DCC_GET_STATS_CMDID);
+		CASE_RETURN_STRING(WMI_DCC_CLEAR_STATS_CMDID);
+		CASE_RETURN_STRING(WMI_DCC_UPDATE_NDL_CMDID);
+		CASE_RETURN_STRING(WMI_ROAM_FILTER_CMDID);
 	}
 	return "Invalid WMI cmd";
 }
+
+/* worker thread to recover when Target doesn't respond with credits */
+static void recovery_work_handler(struct work_struct *recovery)
+{
+    cnss_device_self_recovery();
+}
+
+static DECLARE_WORK(recovery_work, recovery_work_handler);
 
 /* WMI command API */
 int wmi_unified_cmd_send(wmi_unified_t wmi_handle, wmi_buf_t buf, int len,
@@ -656,7 +681,8 @@ int wmi_unified_cmd_send(wmi_unified_t wmi_handle, wmi_buf_t buf, int len,
 		//dump_CE_debug_register(scn->hif_sc);
 		adf_os_atomic_dec(&wmi_handle->pending_cmds);
 		pr_err("%s: MAX 1024 WMI Pending cmds reached.\n", __func__);
-		VOS_BUG(0);
+		vos_set_logp_in_progress(VOS_MODULE_ID_VOSS, TRUE);
+		schedule_work(&recovery_work);
 		return -EBUSY;
 	}
 
@@ -735,6 +761,7 @@ int wmi_unified_register_event_handler(wmi_unified_t wmi_handle,
     wmi_handle->event_handler[idx] = handler_func;
     wmi_handle->event_id[idx] = event_id;
     wmi_handle->max_event_idx++;
+
     return 0;
 }
 
@@ -817,6 +844,7 @@ void wmi_control_rx(void *ctx, HTC_PACKET *htc_packet)
 	u_int32_t id;
 	u_int8_t *data;
 #endif
+
 	evt_buf = (wmi_buf_t) htc_packet->pPktContext;
 #ifndef QCA_CONFIG_SMP
 	id = WMI_GET_FIELD(adf_nbuf_data(evt_buf), WMI_CMD_HDR, COMMANDID);
@@ -941,7 +969,7 @@ end:
 	adf_nbuf_free(evt_buf);
 }
 
-void wmi_rx_event_work(struct work_struct *work)
+void __wmi_rx_event_work(struct work_struct *work)
 {
 	struct wmi_unified *wmi = container_of(work, struct wmi_unified,
 					       rx_event_work);
@@ -956,6 +984,13 @@ void wmi_rx_event_work(struct work_struct *work)
 		buf = adf_nbuf_queue_remove(&wmi->event_queue);
 		adf_os_spin_unlock_bh(&wmi->eventq_lock);
 	}
+}
+
+void wmi_rx_event_work(struct work_struct *work)
+{
+	vos_ssr_protect(__func__);
+	__wmi_rx_event_work(work);
+	vos_ssr_unprotect(__func__);
 }
 
 /* WMI Initialization functions */
@@ -1062,6 +1097,7 @@ wmi_unified_connect_htc_service(struct wmi_unified * wmi_handle, void *htc_handl
     }
     wmi_handle->wmi_endpoint_id = response.Endpoint;
     wmi_handle->htc_handle = htc_handle;
+    wmi_handle->max_msg_len = response.MaxMsgLength;
 
     return EOK;
 }

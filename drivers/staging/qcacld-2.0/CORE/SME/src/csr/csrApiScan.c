@@ -554,11 +554,12 @@ static void csrScan2GOnyRequest(tpAniSirGlobal pMac,tSmeCmd *pScanCmd,
         return;
     }
 
-    if (pScanCmd->u.scanCmd.scanID ||
+    if ((pScanCmd->u.scanCmd.scanID != FIRST_SCAN_ID) ||
        (eCSR_SCAN_REQUEST_FULL_SCAN != pScanRequest->requestType))
            return;
 
-    //Contsruct valid Supported 2.4 GHz Channel List
+    smsLog( pMac, LOG1, FL("Scanning only 2G Channels during first scan"));
+    /* Construct valid Supported 2.4 GHz Channel List */
     for( index = 0; index < ARRAY_SIZE(channelList2G); index++ )
     {
         channelId = channelList2G[index];
@@ -724,7 +725,7 @@ eHalStatus csrScanRequest(tpAniSirGlobal pMac, tANI_U16 sessionId,
                 // If it is the first scan request from HDD, CSR checks if it is for 11d.
                 // If it is not, CSR will save the scan request in the pending cmd queue
                 // & issue an 11d scan request to PE.
-                if (((0 == pScanCmd->u.scanCmd.scanID)
+                if (((FIRST_SCAN_ID == pScanCmd->u.scanCmd.scanID)
                    && (eCSR_SCAN_REQUEST_11D_SCAN != pScanRequest->requestType))
 #ifdef SOFTAP_CHANNEL_RANGE
                    && (eCSR_SCAN_SOFTAP_CHANNEL_RANGE != pScanRequest->requestType)
@@ -844,7 +845,6 @@ eHalStatus csrScanRequest(tpAniSirGlobal pMac, tANI_U16 sessionId,
                 //Once we turn on Wifi
                 if(pMac->scan.fFirstScanOnly2GChnl)
                 {
-                    smsLog( pMac, LOG1, FL("Scanning only 2G Channels during first scan"));
                     csrScan2GOnyRequest(pMac, pScanCmd, pScanRequest);
                 }
 
@@ -859,6 +859,14 @@ eHalStatus csrScanRequest(tpAniSirGlobal pMac, tANI_U16 sessionId,
                 }
 
                 status = csrScanCopyRequest(pMac, &pScanCmd->u.scanCmd.u.scanRequest, pScanRequest);
+                /*
+                 * Reset the variable after the first scan is queued after
+                 * loading the driver. The purpose of this parameter is that
+                 * DFS channels are skipped during the first scan after loading
+                 * the driver. The above API builds the target scan request in
+                 * which this variable is used.
+                 */
+                pMac->roam.configParam.initial_scan_no_dfs_chnl = 0;
                 if(HAL_STATUS_SUCCESS(status))
                 {
                   tCsrScanRequest *pTempScanReq =
@@ -2837,8 +2845,20 @@ tANI_BOOLEAN csrRemoveDupBssDescription( tpAniSirGlobal pMac, tSirBssDescription
         if ( csrIsDuplicateBssDescription( pMac, &pBssDesc->Result.BssDescriptor,
                                                         pSirBssDescr, pIes, fForced ) )
         {
-            pSirBssDescr->rssi = (tANI_S8)( (((tANI_S32)pSirBssDescr->rssi * CSR_SCAN_RESULT_RSSI_WEIGHT ) +
-                                             ((tANI_S32)pBssDesc->Result.BssDescriptor.rssi * (100 - CSR_SCAN_RESULT_RSSI_WEIGHT) )) / 100 );
+            int32_t rssi_new, rssi_old;
+
+            rssi_new = (int32_t) pSirBssDescr->rssi;
+            rssi_old = (int32_t) pBssDesc->Result.BssDescriptor.rssi;
+            rssi_new = ((rssi_new * CSR_SCAN_RESULT_RSSI_WEIGHT) +
+                         rssi_old * (100 - CSR_SCAN_RESULT_RSSI_WEIGHT)) / 100;
+            pSirBssDescr->rssi = (tANI_S8) rssi_new;
+
+            rssi_new = (int32_t) pSirBssDescr->rssi_raw;
+            rssi_old = (int32_t) pBssDesc->Result.BssDescriptor.rssi_raw;
+            rssi_new = ((rssi_new * CSR_SCAN_RESULT_RSSI_WEIGHT) +
+                         rssi_old * (100 - CSR_SCAN_RESULT_RSSI_WEIGHT)) / 100;
+            pSirBssDescr->rssi_raw = (tANI_S8) rssi_new;
+
             // Remove the 'old' entry from the list....
             if( csrLLRemoveEntry( &pMac->scan.scanResultList, pEntry, LL_ACCESS_LOCK ) )
             {
@@ -6137,6 +6157,7 @@ eHalStatus csrScanCopyRequest(tpAniSirGlobal pMac, tCsrScanRequest *pDstReq, tCs
     tANI_U32 index = 0;
     tANI_U32 new_index = 0;
     eNVChannelEnabledType NVchannel_state;
+    uint8_t skip_dfs_chnl = pMac->roam.configParam.initial_scan_no_dfs_chnl;
 
     do
     {
@@ -6196,7 +6217,8 @@ eHalStatus csrScanCopyRequest(tpAniSirGlobal pMac, tCsrScanRequest *pDstReq, tCs
                           NVchannel_state = vos_nv_getChannelEnabledState(
                                   pSrcReq->ChannelInfo.ChannelList[index]);
                           if ((NV_CHANNEL_ENABLE == NVchannel_state) ||
-                                  (NV_CHANNEL_DFS == NVchannel_state))
+                                  ((NV_CHANNEL_DFS == NVchannel_state) &&
+                                    !skip_dfs_chnl))
                           {
                              pDstReq->ChannelInfo.ChannelList[new_index] =
                                  pSrcReq->ChannelInfo.ChannelList[index];
@@ -6221,7 +6243,8 @@ eHalStatus csrScanCopyRequest(tpAniSirGlobal pMac, tCsrScanRequest *pDstReq, tCs
                                ((eCSR_SCAN_P2P_DISCOVERY == pSrcReq->requestType) &&
                                 CSR_IS_SOCIAL_CHANNEL(pSrcReq->ChannelInfo.ChannelList[index])))
                             {
-                                if( (pSrcReq->skipDfsChnlInP2pSearch &&
+                                if( ((pSrcReq->skipDfsChnlInP2pSearch ||
+                                    skip_dfs_chnl) &&
                                     (NV_CHANNEL_DFS == vos_nv_getChannelEnabledState(pSrcReq->ChannelInfo.ChannelList[index])) )
 #ifdef FEATURE_WLAN_LFR
                                      /*

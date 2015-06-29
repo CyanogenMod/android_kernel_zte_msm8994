@@ -92,11 +92,9 @@
 #endif
 #include "vos_sched.h"
 #include <qc_sap_ioctl.h>
-#ifdef FEATURE_WLAN_TDLS
 #include "wlan_hdd_tdls.h"
 #include "wlan_hdd_wmm.h"
 #include "wlan_qct_wda.h"
-#endif
 #include "wlan_nv.h"
 #include "wlan_hdd_dev_pwr.h"
 #ifdef CONFIG_CNSS
@@ -4406,6 +4404,9 @@ int wlan_hdd_cfg80211_init(struct device *dev,
     wiphy->flags |= WIPHY_FLAG_SUPPORTS_TDLS
                  |  WIPHY_FLAG_TDLS_EXTERNAL_SETUP;
 #endif
+
+    wiphy->features |= NL80211_FEATURE_HT_IBSS;
+
 #ifdef FEATURE_WLAN_SCAN_PNO
     if (pCfg->configPNOScanSupport)
     {
@@ -4434,7 +4435,7 @@ int wlan_hdd_cfg80211_init(struct device *dev,
 
     wiphy->max_scan_ssids = MAX_SCAN_SSID;
 
-    wiphy->max_scan_ie_len = SIR_MAC_MAX_IE_LENGTH;
+    wiphy->max_scan_ie_len = SIR_MAC_MAX_ADD_IE_LENGTH;
 
     wiphy->max_acl_mac_addrs = MAX_ACL_MAC_ADDRESS;
 
@@ -6334,6 +6335,8 @@ static int wlan_hdd_cfg80211_start_bss(hdd_adapter_t *pHostapdAdapter,
 
     pSapEventCallback = hdd_hostapd_SAPEventCB;
 
+    (WLAN_HDD_GET_AP_CTX_PTR(pHostapdAdapter))->dfs_cac_block_tx = VOS_TRUE;
+
     status = WLANSAP_StartBss(
 #ifdef WLAN_FEATURE_MBSSID
                  WLAN_HDD_GET_SAP_CTX_PTR(pHostapdAdapter),
@@ -6394,7 +6397,7 @@ static int wlan_hdd_cfg80211_start_bss(hdd_adapter_t *pHostapdAdapter,
 }
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0))
-static int wlan_hdd_cfg80211_add_beacon(struct wiphy *wiphy,
+static int __wlan_hdd_cfg80211_add_beacon(struct wiphy *wiphy,
                                         struct net_device *dev,
                                         struct beacon_parameters *params)
 {
@@ -6455,7 +6458,28 @@ static int wlan_hdd_cfg80211_add_beacon(struct wiphy *wiphy,
     return status;
 }
 
-static int wlan_hdd_cfg80211_set_beacon(struct wiphy *wiphy,
+/**
+ * wlan_hdd_cfg80211_add_beacon() - add beacon in sap mode
+ * @wiphy: Pointer to wiphy
+ * @dev: Pointer to netdev
+ * @param: Pointer to beacon parameters
+ *
+ * Return: zero for success non-zero for failure
+ */
+static int wlan_hdd_cfg80211_add_beacon(struct wiphy *wiphy,
+					struct net_device *dev,
+					struct beacon_parameters *params)
+{
+	int ret;
+
+	vos_ssr_protect(__func__);
+	ret = __wlan_hdd_cfg80211_add_beacon(wiphy, dev, params);
+	vos_ssr_unprotect(__func__);
+
+	return ret;
+}
+
+static int __wlan_hdd_cfg80211_set_beacon(struct wiphy *wiphy,
                                         struct net_device *dev,
                                         struct beacon_parameters *params)
 {
@@ -6508,13 +6532,34 @@ static int wlan_hdd_cfg80211_set_beacon(struct wiphy *wiphy,
     return status;
 }
 
+/**
+ * wlan_hdd_cfg80211_set_beacon() - set beacon in sap mode
+ * @wiphy: Pointer to wiphy
+ * @dev: Pointer to netdev
+ * @param: Pointer to beacon parameters
+ *
+ * Return: zero for success non-zero for failure
+ */
+static int wlan_hdd_cfg80211_set_beacon(struct wiphy *wiphy,
+					struct net_device *dev,
+					struct beacon_parameters *params)
+{
+	int ret;
+
+	vos_ssr_protect(__func__);
+	ret = __wlan_hdd_cfg80211_set_beacon(wiphy, dev, params);
+	vos_ssr_unprotect(__func__);
+
+	return ret;
+}
+
 #endif //(LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0))
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0))
-static int wlan_hdd_cfg80211_del_beacon(struct wiphy *wiphy,
+static int __wlan_hdd_cfg80211_del_beacon(struct wiphy *wiphy,
                                         struct net_device *dev)
 #else
-static int wlan_hdd_cfg80211_stop_ap (struct wiphy *wiphy,
+static int __wlan_hdd_cfg80211_stop_ap (struct wiphy *wiphy,
                                       struct net_device *dev)
 #endif
 {
@@ -6555,10 +6600,13 @@ static int wlan_hdd_cfg80211_stop_ap (struct wiphy *wiphy,
         staAdapter = pAdapterNode->pAdapter;
 
         if (WLAN_HDD_INFRA_STATION == staAdapter->device_mode ||
-           (WLAN_HDD_P2P_CLIENT == staAdapter->device_mode)) {
+           (WLAN_HDD_P2P_CLIENT == staAdapter->device_mode) ||
+           (WLAN_HDD_P2P_GO == staAdapter->device_mode)) {
             pScanInfo = &staAdapter->scan_info;
 
             if (pScanInfo && pScanInfo->mScanPending) {
+               hddLog(LOG1, FL("Aborting pending scan for device mode:%d"),
+                      staAdapter->device_mode);
                INIT_COMPLETION(pScanInfo->abortscan_event_var);
                hdd_abort_mac_scan(staAdapter->pHddCtx, staAdapter->sessionId,
                                   eCSR_SCAN_ABORT_DEFAULT);
@@ -6655,9 +6703,48 @@ static int wlan_hdd_cfg80211_stop_ap (struct wiphy *wiphy,
     return ret;
 }
 
-#if (LINUX_VERSION_CODE > KERNEL_VERSION(3,3,0))
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 4, 0))
+/**
+ * wlan_hdd_cfg80211_del_beacon() - delete beacon in sap mode
+ * @wiphy: Pointer to wiphy
+ * @dev: Pointer to netdev
+ *
+ * Return: zero for success non-zero for failure
+ */
+static int wlan_hdd_cfg80211_del_beacon(struct wiphy *wiphy,
+					struct net_device *dev)
+{
+	int ret;
 
-static int wlan_hdd_cfg80211_start_ap(struct wiphy *wiphy,
+	vos_ssr_protect(__func__);
+	ret = __wlan_hdd_cfg80211_del_beacon(wiphy, dev);
+	vos_ssr_unprotect(__func__);
+
+	return ret;
+}
+#else
+/**
+ * wlan_hdd_cfg80211_stop_ap() - stop sap
+ * @wiphy: Pointer to wiphy
+ * @dev: Pointer to netdev
+ *
+ * Return: zero for success non-zero for failure
+ */
+static int wlan_hdd_cfg80211_stop_ap(struct wiphy *wiphy,
+					struct net_device *dev)
+{
+	int ret;
+
+	vos_ssr_protect(__func__);
+	ret = __wlan_hdd_cfg80211_stop_ap(wiphy, dev);
+	vos_ssr_unprotect(__func__);
+
+	return ret;
+}
+#endif
+
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(3,3,0))
+static int __wlan_hdd_cfg80211_start_ap(struct wiphy *wiphy,
                                       struct net_device *dev,
                                       struct cfg80211_ap_settings *params)
 {
@@ -6744,8 +6831,29 @@ static int wlan_hdd_cfg80211_start_ap(struct wiphy *wiphy,
     return status;
 }
 
+/**
+ * wlan_hdd_cfg80211_start_ap() - start sap
+ * @wiphy: Pointer to wiphy
+ * @dev: Pointer to netdev
+ * @params: Pointer to start ap configuration parameters
+ *
+ * Return: zero for success non-zero for failure
+ */
+static int wlan_hdd_cfg80211_start_ap(struct wiphy *wiphy,
+                                      struct net_device *dev,
+                                      struct cfg80211_ap_settings *params)
+{
+	int ret;
 
-static int wlan_hdd_cfg80211_change_beacon(struct wiphy *wiphy,
+	vos_ssr_protect(__func__);
+	ret = __wlan_hdd_cfg80211_start_ap(wiphy, dev, params);
+	vos_ssr_unprotect(__func__);
+
+	return ret;
+}
+#endif
+
+static int __wlan_hdd_cfg80211_change_beacon(struct wiphy *wiphy,
                                            struct net_device *dev,
                                            struct cfg80211_beacon_data *params)
 {
@@ -6797,7 +6905,26 @@ static int wlan_hdd_cfg80211_change_beacon(struct wiphy *wiphy,
     return status;
 }
 
-#endif /* (LINUX_VERSION_CODE > KERNEL_VERSION(3,3,0)) */
+/**
+ * wlan_hdd_cfg80211_change_beacon() - change beacon content in sap mode
+ * @wiphy: Pointer to wiphy
+ * @dev: Pointer to netdev
+ * @params: Pointer to change beacon parameters
+ *
+ * Return: zero for success non-zero for failure
+ */
+static int wlan_hdd_cfg80211_change_beacon(struct wiphy *wiphy,
+					struct net_device *dev,
+					struct cfg80211_beacon_data *params)
+{
+	int ret;
+
+	vos_ssr_protect(__func__);
+	ret = __wlan_hdd_cfg80211_change_beacon(wiphy, dev, params);
+	vos_ssr_unprotect(__func__);
+
+	return ret;
+}
 
 static int __wlan_hdd_cfg80211_change_bss (struct wiphy *wiphy,
                                       struct net_device *dev,
@@ -6988,6 +7115,8 @@ static int __wlan_hdd_cfg80211_change_iface(struct wiphy *wiphy,
 #endif /* WLAN_BTAMP_FEATURE */
     /* Reset the current device mode bit mask */
     wlan_hdd_clear_concurrency_mode(pHddCtx, pAdapter->device_mode);
+
+    hdd_tdls_notify_mode_change(pAdapter, pHddCtx);
 
     if ((pAdapter->device_mode == WLAN_HDD_INFRA_STATION) ||
         (pAdapter->device_mode == WLAN_HDD_P2P_CLIENT) ||
@@ -8579,6 +8708,7 @@ wlan_hdd_cfg80211_inform_bss_frame( hdd_adapter_t *pAdapter,
 #ifdef CONFIG_CNSS
     struct timespec ts;
 #endif
+    hdd_config_t *cfg_param = NULL;
 
     pHddCtx = WLAN_HDD_GET_CTX(pAdapter);
     status = wlan_hdd_validate_context(pHddCtx);
@@ -8587,6 +8717,7 @@ wlan_hdd_cfg80211_inform_bss_frame( hdd_adapter_t *pAdapter,
         return NULL;
     }
 
+    cfg_param = pHddCtx->cfg_ini;
     mgmt = kzalloc((sizeof (struct ieee80211_mgmt) + ie_length), GFP_KERNEL);
     if (!mgmt) {
         hddLog(LOGE, FL("memory allocation failed"));
@@ -8675,8 +8806,15 @@ wlan_hdd_cfg80211_inform_bss_frame( hdd_adapter_t *pAdapter,
        return NULL;
     }
 
+    /* Based on .ini configuration, raw rssi can be reported for bss.
+     * Raw rssi is typically used for estimating power.
+     */
+
+    rssi = (cfg_param->inform_bss_rssi_raw) ? bss_desc->rssi_raw :
+                                              bss_desc->rssi;
+
     /* Supplicant takes the signal strength in terms of mBm(100*dBm) */
-    rssi = (VOS_MIN ((bss_desc->rssi + bss_desc->sinr), 0)) * 100;
+    rssi = (VOS_MIN(rssi, 0)) * 100;
 
     hddLog(LOG1, FL("BSSID: "MAC_ADDRESS_STR" Channel:%d RSSI:%d"),
            MAC_ADDR_ARRAY(mgmt->bssid), chan->center_freq, (int)(rssi/100));
@@ -10164,7 +10302,8 @@ int wlan_hdd_cfg80211_set_ie( hdd_adapter_t *pAdapter,
                     hddLog (VOS_TRACE_LEVEL_INFO, "%s Set WPS IE(len %d)",
                             __func__, eLen + 2);
 
-                    if( SIR_MAC_MAX_IE_LENGTH < (pWextState->assocAddIE.length + eLen) )
+                    if (SIR_MAC_MAX_ADD_IE_LENGTH <
+                            (pWextState->assocAddIE.length + eLen))
                     {
                        hddLog(VOS_TRACE_LEVEL_FATAL, "Cannot accommodate assocAddIE. "
                                                       "Need bigger buffer space");
@@ -10194,7 +10333,8 @@ int wlan_hdd_cfg80211_set_ie( hdd_adapter_t *pAdapter,
                     hddLog (VOS_TRACE_LEVEL_INFO, "%s Set P2P IE(len %d)",
                             __func__, eLen + 2);
 
-                    if( SIR_MAC_MAX_IE_LENGTH < (pWextState->assocAddIE.length + eLen) )
+                    if (SIR_MAC_MAX_ADD_IE_LENGTH <
+                            (pWextState->assocAddIE.length + eLen))
                     {
                        hddLog(VOS_TRACE_LEVEL_FATAL, "Cannot accommodate assocAddIE "
                                                       "Need bigger buffer space");
@@ -10218,7 +10358,8 @@ int wlan_hdd_cfg80211_set_ie( hdd_adapter_t *pAdapter,
                     hddLog (VOS_TRACE_LEVEL_INFO, "%s Set WFD IE(len %d)",
                             __func__, eLen + 2);
 
-                    if( SIR_MAC_MAX_IE_LENGTH < (pWextState->assocAddIE.length + eLen) )
+                    if (SIR_MAC_MAX_ADD_IE_LENGTH <
+                            (pWextState->assocAddIE.length + eLen))
                     {
                        hddLog(VOS_TRACE_LEVEL_FATAL, "Cannot accommodate assocAddIE "
                                                       "Need bigger buffer space");
@@ -10242,7 +10383,8 @@ int wlan_hdd_cfg80211_set_ie( hdd_adapter_t *pAdapter,
                     hddLog (VOS_TRACE_LEVEL_INFO, "%s Set HS20 IE(len %d)",
                             __func__, eLen + 2);
 
-                    if( SIR_MAC_MAX_IE_LENGTH < (pWextState->assocAddIE.length + eLen) )
+                    if (SIR_MAC_MAX_ADD_IE_LENGTH <
+                            (pWextState->assocAddIE.length + eLen))
                     {
                         hddLog(VOS_TRACE_LEVEL_FATAL, "Cannot accommodate assocAddIE "
                                "Need bigger buffer space");
@@ -10263,7 +10405,7 @@ int wlan_hdd_cfg80211_set_ie( hdd_adapter_t *pAdapter,
                     hddLog (VOS_TRACE_LEVEL_INFO, "%s Set OSEN IE(len %d)",
                             __func__, eLen + 2);
 
-                    if ( SIR_MAC_MAX_IE_LENGTH < (pWextState->assocAddIE.length + eLen) ) {
+                    if ( SIR_MAC_MAX_ADD_IE_LENGTH < (pWextState->assocAddIE.length + eLen) ) {
                            hddLog(VOS_TRACE_LEVEL_FATAL, "Cannot accommodate assocAddIE "
                                "Need bigger buffer space");
                         VOS_ASSERT(0);
@@ -10291,7 +10433,8 @@ int wlan_hdd_cfg80211_set_ie( hdd_adapter_t *pAdapter,
                     hddLog (VOS_TRACE_LEVEL_INFO, "%s Set Extended CAPS IE(len %d)",
                             __func__, eLen + 2);
 
-                    if( SIR_MAC_MAX_IE_LENGTH < (pWextState->assocAddIE.length + eLen) )
+                    if (SIR_MAC_MAX_ADD_IE_LENGTH <
+                            (pWextState->assocAddIE.length + eLen))
                     {
                        hddLog(VOS_TRACE_LEVEL_FATAL, "Cannot accommodate assocAddIE "
                                                       "Need bigger buffer space");
@@ -11664,14 +11807,14 @@ static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
         nss = pAdapter->hdd_stats.ClassA_stat.rx_frag_cnt;
 
         if (eHDD_LINK_SPEED_REPORT_ACTUAL == pCfg->reportMaxLinkSpeed) {
+            /* Get current rate flags if report actual */
             rate_flags = pAdapter->hdd_stats.ClassA_stat.promiscuous_rx_frag_cnt;
-            if (pAdapter->hdd_stats.ClassA_stat.mcs_index == INVALID_MCS_IDX) {
-                rate_flags = eHAL_TX_RATE_LEGACY;
-                pAdapter->hdd_stats.ClassA_stat.mcs_index = 0;
-            }
         }
-        else
+
+        if (pAdapter->hdd_stats.ClassA_stat.mcs_index == INVALID_MCS_IDX) {
+            rate_flags = eHAL_TX_RATE_LEGACY;
             pAdapter->hdd_stats.ClassA_stat.mcs_index = 0;
+        }
     }
 #ifdef LINKSPEED_DEBUG_ENABLED
     pr_info("RSSI %d, RLMS %u, rate %d, rssi high %d, rssi mid %d, rssi low %d, rate_flags 0x%x, MCS %d\n",

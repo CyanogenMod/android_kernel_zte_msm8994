@@ -648,7 +648,6 @@ limSendSmeStartBssRsp(tpAniSirGlobal pMac,
                 limGetPhyMode(pMac, (tANI_U32 *)&pSirSmeRsp->bssDescription.nwType, psessionEntry);
 
                 pSirSmeRsp->bssDescription.channelId = psessionEntry->currentOperChannel;
-                pSirSmeRsp->bssDescription.aniIndicator = 1;
 
                 curLen = psessionEntry->schBeaconOffsetBegin - ieOffset;
                 vos_mem_copy( (tANI_U8 *) &pSirSmeRsp->bssDescription.ieFields,
@@ -3236,6 +3235,7 @@ limProcessBeaconTxSuccessInd(tpAniSirGlobal pMac, tANI_U16 msgType, void *event)
       {
          /* Done with CSA IE update, send response back to SME */
          psessionEntry->gLimChannelSwitch.switchCount = 0;
+         psessionEntry->gLimChannelSwitch.switchMode = 0;
          psessionEntry->dfsIncludeChanSwIe = VOS_FALSE;
          psessionEntry->dfsIncludeChanWrapperIe = VOS_FALSE;
 
