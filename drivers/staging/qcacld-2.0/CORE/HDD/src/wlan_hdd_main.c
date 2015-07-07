@@ -4006,6 +4006,41 @@ int hdd_set_miracast_mode(hdd_adapter_t *pAdapter, tANI_U8 *command)
     return 0;
 }
 
+/**
+ * drv_cmd_set_fcc_channel() - handle fcc constraint request
+ * @hdd_ctx: HDD context
+ * @cmd: command ptr
+ * @cmd_len: command len
+ *
+ * Return: status
+ */
+static int drv_cmd_set_fcc_channel(hdd_context_t *hdd_ctx, uint8_t *cmd,
+                                   uint8_t cmd_len)
+{
+	uint8_t *value;
+	uint8_t fcc_constraint;
+	eHalStatus status;
+	int ret = 0;
+
+	value =  cmd + cmd_len + 1;
+
+	ret = kstrtou8(value, 10, &fcc_constraint);
+	if ((ret < 0) || (fcc_constraint > 1)) {
+		/*
+		 *  If the input value is greater than max value of datatype,
+		 *  then also it is a failure
+		 */
+		hddLog(LOGE, FL("value out of range"));
+		return -EINVAL;
+	}
+
+	status = sme_disable_non_fcc_channel(hdd_ctx->hHal, !fcc_constraint);
+	if (status != eHAL_STATUS_SUCCESS)
+		ret = -EPERM;
+
+	return ret;
+}
+
 static int hdd_driver_command(hdd_adapter_t *pAdapter,
                               hdd_priv_data_t *ppriv_data)
 {
@@ -6100,7 +6135,20 @@ static int hdd_driver_command(hdd_adapter_t *pAdapter,
            ret = hdd_set_tdls_scan_type(pHddCtx, set_value);
        }
 #endif
-       else {
+       else if (strncasecmp(command, "SET_FCC_CHANNEL", 15) == 0) {
+           /*
+            * this command wld be called by user-space when it detects WLAN
+            * ON after airplane mode is set. When APM is set, WLAN turns off.
+            * But it can be turned back on. Otherwise; when APM is turned back
+            * off, WLAN wld turn back on. So at that point the command is
+            * expected to come down. 0 means disable, 1 means enable. The
+            * constraint is removed when parameter 1 is set or different
+            * country code is set
+            */
+
+           ret = drv_cmd_set_fcc_channel(pHddCtx, command, 15);
+
+       } else {
            MTRACE(vos_trace(VOS_MODULE_ID_HDD,
                             TRACE_CODE_HDD_UNSUPPORTED_IOCTL,
                             pAdapter->sessionId, 0));
@@ -6610,14 +6658,6 @@ static void hdd_update_tgt_services(hdd_context_t *hdd_ctx,
     else
     {
         cfg_ini->fEnableTDLSSleepSta = FALSE;
-    }
-    if (cfg_ini->fEnableTDLSSleepSta || cfg_ini->fEnableTDLSBufferSta)
-    {
-        /* Adjust max TDLS sta number if self is either sleep STA or buf STA */
-        hdd_ctx->max_num_tdls_sta = HDD_MAX_NUM_TDLS_STA_P_UAPSD;
-        hddLog(VOS_TRACE_LEVEL_INFO_HIGH,
-               "%s: P-UAPSD: sleep or buffer sta enabled, max_tdls_peer_# = %d",
-               __func__, hdd_ctx->max_num_tdls_sta);
     }
 #endif
     pMac->beacon_offload = cfg->beacon_offload;
@@ -9015,6 +9055,13 @@ hdd_adapter_t* hdd_open_adapter( hdd_context_t *pHddCtx, tANI_U8 session_type,
          //netif_tx_disable(pWlanDev);
          netif_carrier_off(pAdapter->dev);
 
+         if (WLAN_HDD_P2P_CLIENT == session_type ||
+                 WLAN_HDD_P2P_DEVICE == session_type) {
+             /* Initialize the work queue to defer the
+              * back to back RoC request */
+             INIT_DELAYED_WORK(&pAdapter->roc_work, hdd_p2p_roc_work_queue);
+         }
+
 #ifdef QCA_LL_TX_FLOW_CT
          /* SAT mode default TX Flow control instance
           * This instance will be used for
@@ -9066,6 +9113,12 @@ hdd_adapter_t* hdd_open_adapter( hdd_context_t *pHddCtx, tANI_U8 session_type,
          netif_carrier_off(pAdapter->dev);
 
          hdd_set_conparam( 1 );
+         if (WLAN_HDD_P2P_GO == session_type) {
+             /* Initialize the work queue to
+              * defer the back to back RoC request */
+             INIT_DELAYED_WORK(&pAdapter->roc_work, hdd_p2p_roc_work_queue);
+         }
+
          break;
       }
       case WLAN_HDD_MONITOR:
@@ -9259,7 +9312,7 @@ hdd_adapter_t* hdd_open_adapter( hdd_context_t *pHddCtx, tANI_U8 session_type,
   {
        ret = process_wma_set_command((int)pAdapter->sessionId,
                          (int)WMI_PDEV_PARAM_HYST_EN,
-                         (int)pHddCtx->cfg_ini->enableHystereticMode,
+                         (int)pHddCtx->cfg_ini->enableMemDeepSleep,
                          PDEV_CMD);
 
        if (ret != 0)
@@ -9548,6 +9601,9 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
          }
          if (pAdapter->device_mode != WLAN_HDD_INFRA_STATION) {
              wlan_hdd_cleanup_remain_on_channel_ctx(pAdapter);
+#ifdef WLAN_OPEN_SOURCE
+             cancel_delayed_work_sync(&pAdapter->roc_work);
+#endif
          }
 
          if (pAdapter->ipv4_notifier_registered)
@@ -9611,6 +9667,9 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
          //Any softap specific cleanup here...
          if (pAdapter->device_mode == WLAN_HDD_P2P_GO) {
              wlan_hdd_cleanup_remain_on_channel_ctx(pAdapter);
+#ifdef WLAN_OPEN_SOURCE
+             cancel_delayed_work_sync(&pAdapter->roc_work);
+#endif
          }
 
 #ifdef QCA_LL_TX_FLOW_CT
@@ -11048,6 +11107,10 @@ void hdd_wlan_exit(hdd_context_t *pHddCtx)
                                            __func__);
    }
 
+   /* Free up RoC request queue and flush workqueue */
+   vos_flush_work(&pHddCtx->rocReqWork);
+   hdd_list_destroy(&pHddCtx->hdd_roc_req_q);
+
 free_hdd_ctx:
    /* Free up dynamically allocated members inside HDD Adapter */
    if (pHddCtx->cfg_ini) {
@@ -12430,6 +12493,14 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
    wlan_hdd_send_version_pkg(pHddCtx->target_fw_version,
                              pHddCtx->target_hw_version,
                              pHddCtx->target_hw_name);
+#endif
+
+   /* Initialize the RoC Request queue and work. */
+   hdd_list_init((&pHddCtx->hdd_roc_req_q), MAX_ROC_REQ_QUEUE_ENTRY);
+#ifdef CONFIG_CNSS
+   cnss_init_work(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
+#else
+   INIT_WORK(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
 #endif
 
    complete(&wlan_start_comp);

@@ -139,6 +139,7 @@
 #define WMA_HOST_ROAM_SCAN_REQID_PREFIX  0xA800
 /* Prefix used by scan requestor id on host */
 #define WMA_HOST_SCAN_REQUESTOR_ID_PREFIX 0xA000
+#define WMA_HW_DEF_SCAN_MAX_DURATION      30000 /* 30 secs */
 
 /* Max offchannel duration */
 #define WMA_BURST_SCAN_MAX_NUM_OFFCHANNELS  (3)
@@ -1125,6 +1126,8 @@ u_int16_t get_regdmn_5g(u_int32_t reg_dmn);
  * TODO: Need to Revist the Timing
  */
 #define WMA_TX_FRAME_COMPLETE_TIMEOUT  1000
+#define WMA_TX_FRAME_BUFFER_NO_FREE    0
+#define WMA_TX_FRAME_BUFFER_FREE       1
 
 struct wma_tx_ack_work_ctx {
 	tp_wma_handle wma_handle;
