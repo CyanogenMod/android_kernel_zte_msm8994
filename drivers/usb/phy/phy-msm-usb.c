@@ -1302,7 +1302,6 @@ static int msm_otg_suspend(struct msm_otg *motg)
 		return -EBUSY;
 	}
 
-	motg->ui_enabled = 0;
 	disable_irq(motg->irq);
 	if (motg->phy_irq)
 		disable_irq(motg->phy_irq);
@@ -1347,7 +1346,6 @@ lpm_start:
 		test_bit(A_BUS_REQ, &motg->inputs) || sm_work_busy) {
 		if (test_bit(A_BUS_REQ, &motg->inputs))
 			motg->pm_done = 1;
-		motg->ui_enabled = 1;
 		enable_irq(motg->irq);
 		if (motg->phy_irq)
 			enable_irq(motg->phy_irq);
@@ -1564,10 +1562,8 @@ phcd_retry:
 	}
 
 	if (device_may_wakeup(phy->dev)) {
-		if (motg->async_irq)
-			enable_irq_wake(motg->async_irq);
-		else
-			enable_irq_wake(motg->irq);
+		enable_irq_wake(motg->async_irq);
+		enable_irq_wake(motg->irq);
 
 		if (motg->phy_irq)
 			enable_irq_wake(motg->phy_irq);
@@ -1593,17 +1589,12 @@ phcd_retry:
 	atomic_set(&motg->in_lpm, 1);
 	wake_up(&motg->host_suspend_wait);
 
-	/* Enable ASYNC IRQ (if present) during LPM */
-	if (motg->async_irq)
-		enable_irq(motg->async_irq);
+	/* Enable ASYNC IRQ during LPM */
+	enable_irq(motg->async_irq);
 	if (motg->phy_irq)
 		enable_irq(motg->phy_irq);
 
-	/* XO shutdown during idle , non wakeable irqs must be disabled */
-	if (device_bus_suspend || host_bus_suspend || !motg->async_irq) {
-		motg->ui_enabled = 1;
-		enable_irq(motg->irq);
-	}
+	enable_irq(motg->irq);
 	wake_unlock(&motg->wlock);
 
 	dev_dbg(phy->dev, "LPM caps = %lu flags = %lu\n",
@@ -1621,7 +1612,6 @@ phcd_retry:
 	return 0;
 
 phy_suspend_fail:
-	motg->ui_enabled = 1;
 	enable_irq(motg->irq);
 	if (motg->phy_irq)
 		enable_irq(motg->phy_irq);
@@ -1647,10 +1637,7 @@ static int msm_otg_resume(struct msm_otg *motg)
 
 	msm_bam_notify_lpm_resume(CI_CTRL);
 
-	if (motg->ui_enabled) {
-		motg->ui_enabled = 0;
-		disable_irq(motg->irq);
-	}
+	disable_irq(motg->irq);
 	wake_lock(&motg->wlock);
 
 	/*
@@ -1772,10 +1759,8 @@ skip_phy_resume:
 	}
 
 	if (device_may_wakeup(phy->dev)) {
-		if (motg->async_irq)
-			disable_irq_wake(motg->async_irq);
-		else
-			disable_irq_wake(motg->irq);
+		disable_irq_wake(motg->async_irq);
+		disable_irq_wake(motg->irq);
 
 		if (motg->phy_irq)
 			disable_irq_wake(motg->phy_irq);
@@ -1805,12 +1790,10 @@ skip_phy_resume:
 		if (phy->state >= OTG_STATE_A_IDLE)
 			set_bit(A_BUS_REQ, &motg->inputs);
 	}
-	motg->ui_enabled = 1;
 	enable_irq(motg->irq);
 
-	/* If ASYNC IRQ is present then keep it enabled only during LPM */
-	if (motg->async_irq)
-		disable_irq(motg->async_irq);
+	/* Enable ASYNC_IRQ only during LPM */
+	disable_irq(motg->async_irq);
 
 	if (motg->phy_irq_pending) {
 		motg->phy_irq_pending = false;
@@ -3798,6 +3781,10 @@ static irqreturn_t msm_otg_irq(int irq, void *data)
 
 	if (atomic_read(&motg->in_lpm)) {
 		pr_debug("OTG IRQ: %d in LPM\n", irq);
+		/*Ignore interrupt if one interrupt already seen in LPM*/
+		if (motg->async_int)
+			return IRQ_HANDLED;
+
 		disable_irq_nosync(irq);
 		motg->async_int = irq;
 		if (!atomic_read(&motg->pm_suspended)) {
@@ -5364,8 +5351,9 @@ static int msm_otg_probe(struct platform_device *pdev)
 
 	motg->async_irq = platform_get_irq_byname(pdev, "async_irq");
 	if (motg->async_irq < 0) {
-		dev_dbg(&pdev->dev, "platform_get_irq for async_int failed\n");
+		dev_err(&pdev->dev, "platform_get_irq for async_int failed\n");
 		motg->async_irq = 0;
+		goto free_regs;
 	}
 
 	if (motg->xo_clk) {
@@ -5518,15 +5506,13 @@ static int msm_otg_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (motg->async_irq) {
-		ret = request_irq(motg->async_irq, msm_otg_irq,
-					IRQF_TRIGGER_RISING, "msm_otg", motg);
-		if (ret) {
-			dev_err(&pdev->dev, "request irq failed (ASYNC INT)\n");
-			goto free_phy_irq;
-		}
-		disable_irq(motg->async_irq);
+	ret = request_irq(motg->async_irq, msm_otg_irq,
+				IRQF_TRIGGER_RISING, "msm_otg", motg);
+	if (ret) {
+		dev_err(&pdev->dev, "request irq failed (ASYNC INT)\n");
+		goto free_phy_irq;
 	}
+	disable_irq(motg->async_irq);
 
 	if (pdata->otg_control == OTG_PHY_CONTROL && pdata->mpm_otgsessvld_int)
 		msm_mpm_enable_pin(pdata->mpm_otgsessvld_int, 1);
@@ -5699,8 +5685,7 @@ remove_cdev:
 remove_phy:
 	usb_remove_phy(&motg->phy);
 free_async_irq:
-	if (motg->async_irq)
-		free_irq(motg->async_irq, motg);
+	free_irq(motg->async_irq, motg);
 free_phy_irq:
 	if (motg->phy_irq)
 		free_irq(motg->phy_irq, motg);
