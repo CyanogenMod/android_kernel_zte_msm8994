@@ -44,6 +44,8 @@ CONFIG_ATH_PERF_PWR_OFFLOAD := 1
 #Disable packet log
 CONFIG_REMOVE_PKT_LOG := 0
 
+CONFIG_BUS_AUTO_SUSPEND := 1
+
 #Enable 11AC TX
 ifeq ($(CONFIG_ROME_IF),pci)
 	CONFIG_ATH_11AC_TXCOMPACT := 1
@@ -965,6 +967,8 @@ CDEFINES += -DCONFIG_ATH_PCIE_MAX_PERF=0 -DCONFIG_ATH_PCIE_AWAKE_WHILE_DRIVER_LO
 CDEFINES += -DQCA_TX_HTT2_SUPPORT
 endif
 
+CDEFINES += -DDEBUG_RX_RING_BUFFER
+
 # enable the MAC Address auto-generation feature
 CDEFINES += -DWLAN_AUTOGEN_MACADDR_FEATURE
 
@@ -1210,6 +1214,10 @@ ifeq ($(CONFIG_PCI_MSM), y)
 CDEFINES += -DFEATURE_WLAN_D0WOW
 endif
 
+# Flag to enable bus auto suspend
+ifeq ($(CONFIG_BUS_AUTO_SUSPEND), 1)
+CDEFINES += -DFEATURE_RUNTIME_PM
+endif
 # Some kernel include files are being moved.  Check to see if
 # the old version of the files are present
 

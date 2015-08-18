@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011, 2014-2015 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -170,6 +170,7 @@ htt_attach(
     if (!pdev) {
         goto fail1;
     }
+    adf_os_mem_set(pdev, 0, sizeof(*pdev));
 
     pdev->osdev = osdev;
     pdev->ctrl_pdev = ctrl_pdev;
@@ -371,6 +372,10 @@ htt_detach(htt_pdev_handle pdev)
 #endif
     HTT_TX_MUTEX_DESTROY(&pdev->htt_tx_mutex);
     HTT_TX_NBUF_QUEUE_MUTEX_DESTROY(pdev);
+#ifdef DEBUG_RX_RING_BUFFER
+    if (pdev->rx_buff_list)
+        adf_os_mem_free(pdev->rx_buff_list);
+#endif
     adf_os_mem_free(pdev);
 }
 
@@ -395,6 +400,7 @@ htt_htc_attach(struct htt_pdev_t *pdev)
     connect.EpCallbacks.EpTxComplete = htt_h2t_send_complete;
     connect.EpCallbacks.EpTxCompleteMultiple = NULL;
     connect.EpCallbacks.EpRecv = htt_t2h_msg_handler;
+    connect.EpCallbacks.EpResumeTxQueue = htt_tx_resume_handler;
 
     /* rx buffers currently are provided by HIF, not by EpRecvRefill */
     connect.EpCallbacks.EpRecvRefill = NULL;
