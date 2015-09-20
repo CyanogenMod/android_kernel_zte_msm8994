@@ -3920,6 +3920,14 @@ REG_TABLE_ENTRY g_registry_table[] =
               CFG_ENABLE_DEAUTH_TO_DISASSOC_MAP_MIN,
               CFG_ENABLE_DEAUTH_TO_DISASSOC_MAP_MAX ),
 
+   REG_VARIABLE( CFG_IGNORE_PEER_ERP_INFO_NAME, WLAN_PARAM_Integer,
+                 hdd_config_t, ignorePeerErpInfo,
+                 VAR_FLAGS_OPTIONAL |
+                 VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
+                 CFG_IGNORE_PEER_ERP_INFO_DEFAULT,
+                 CFG_IGNORE_PEER_ERP_INFO_MIN,
+                 CFG_IGNORE_PEER_ERP_INFO_MAX ),
+
    REG_VARIABLE( CFG_ENABLE_MAC_ADDR_SPOOFING, WLAN_PARAM_Integer,
                  hdd_config_t, enable_mac_spoofing,
                  VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
@@ -3945,20 +3953,6 @@ REG_TABLE_ENTRY g_registry_table[] =
                 CFG_DROPPED_PKT_DISCONNECT_TH_DEFAULT,
                 CFG_DROPPED_PKT_DISCONNECT_TH_MIN,
                 CFG_DROPPED_PKT_DISCONNECT_TH_MAX),
-
-   REG_VARIABLE(CFG_TX_CHAIN_MASK_CCK, WLAN_PARAM_Integer,
-                hdd_config_t, tx_chain_mask_cck,
-                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
-                CFG_TX_CHAIN_MASK_CCK_DEFAULT,
-                CFG_TX_CHAIN_MASK_CCK_MIN,
-                CFG_TX_CHAIN_MASK_CCK_MAX),
-
-   REG_VARIABLE(CFG_TX_CHAIN_MASK_1SS, WLAN_PARAM_Integer,
-                hdd_config_t, tx_chain_mask_1ss,
-                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
-                CFG_TX_CHAIN_MASK_1SS_DEFAULT,
-                CFG_TX_CHAIN_MASK_1SS_MIN,
-                CFG_TX_CHAIN_MASK_1SS_MAX),
 };
 
 #ifdef WLAN_FEATURE_MBSSID
@@ -4464,6 +4458,9 @@ void print_hdd_cfg(hdd_context_t *pHddCtx)
   VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_INFO_HIGH,
           "Name = [gIbssPs1RxChainInAtim] Value = [%u] ",
           pHddCtx->cfg_ini->ibssPs1RxChainInAtimEnable);
+  VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_INFO_HIGH,
+                   "Name = [gIgnorePeerErpInfo] Value = [%u] ",
+                                         pHddCtx->cfg_ini->ignorePeerErpInfo);
   VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_INFO_HIGH, "Name = [fDfsPhyerrFilterOffload] Value = [%u] ",pHddCtx->cfg_ini->fDfsPhyerrFilterOffload);
 
 #ifdef IPA_OFFLOAD
@@ -6358,6 +6355,7 @@ VOS_STATUS hdd_set_sme_config( hdd_context_t *pHddCtx )
 
    smeConfig->csrConfig.pkt_err_disconn_th =
                    pHddCtx->cfg_ini->pkt_err_disconn_th;
+   smeConfig->csrConfig.ignorePeerErpInfo = pConfig->ignorePeerErpInfo;
 
    halStatus = sme_UpdateConfig( pHddCtx->hHal, smeConfig);
    if ( !HAL_STATUS_SUCCESS( halStatus ) )

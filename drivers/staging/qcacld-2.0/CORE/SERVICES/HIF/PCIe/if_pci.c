@@ -700,8 +700,9 @@ wlan_tasklet(unsigned long data)
     struct hif_pci_softc *sc = (struct hif_pci_softc *) data;
     struct HIF_CE_state *hif_state = (struct HIF_CE_state *)sc->hif_device;
     volatile int tmp;
+    bool hif_init_done = sc->hif_init_done;
 
-    if (sc->hif_init_done == FALSE) {
+    if (hif_init_done == FALSE) {
          goto irq_handled;
     }
 
@@ -731,12 +732,23 @@ wlan_tasklet(unsigned long data)
         return;
     }
 irq_handled:
+    /* use cached value for hif_init_done to prevent
+     * unlocking an unlocked spinlock if hif init finishes
+     * while this tasklet is running
+     */
+    if (hif_init_done == TRUE)
+        adf_os_spin_lock_irqsave(&hif_state->suspend_lock);
+
     if (LEGACY_INTERRUPTS(sc) && (sc->ol_sc->target_status !=
                                   OL_TRGET_STATUS_RESET) &&
            (!adf_os_atomic_read(&sc->pci_link_suspended))) {
 
-        if (sc->hif_init_done == TRUE)
-            A_TARGET_ACCESS_BEGIN(hif_state->targid);
+        if (hif_init_done == TRUE) {
+            if(HIFTargetSleepStateAdjust(hif_state->targid, FALSE, TRUE) < 0) {
+                adf_os_spin_unlock_irqrestore(&hif_state->suspend_lock);
+                return;
+            }
+        }
 
         /* Enable Legacy PCI line interrupts */
         A_PCI_WRITE32(sc->mem+(SOC_CORE_BASE_ADDRESS | PCIE_INTR_ENABLE_ADDRESS),
@@ -744,9 +756,17 @@ irq_handled:
         /* IMPORTANT: this extra read transaction is required to flush the posted write buffer */
         tmp = A_PCI_READ32(sc->mem+(SOC_CORE_BASE_ADDRESS | PCIE_INTR_ENABLE_ADDRESS));
 
-        if (sc->hif_init_done == TRUE)
-           A_TARGET_ACCESS_END(hif_state->targid);
+        if (hif_init_done == TRUE) {
+             if(HIFTargetSleepStateAdjust(hif_state->targid, TRUE, FALSE) < 0) {
+                   adf_os_spin_unlock_irqrestore(&hif_state->suspend_lock);
+                   return;
+               }
+        }
     }
+
+    if (hif_init_done == TRUE)
+        adf_os_spin_unlock_irqrestore(&hif_state->suspend_lock);
+
     adf_os_atomic_set(&sc->ce_suspend, 1);
 }
 
@@ -771,24 +791,25 @@ static void hif_pci_pm_work(struct work_struct *work)
 static int hif_pci_autopm_debugfs_show(struct seq_file *s, void *data)
 {
 #define HIF_PCI_AUTOPM_STATS(_s, _sc, _name) \
-	seq_printf(_s, "%20s: %u\n", #_name, _sc->pm_stats._name)
+	seq_printf(_s, "%30s: %u\n", #_name, _sc->pm_stats._name)
 	struct hif_pci_softc *sc = s->private;
-	char *autopm_state[] = {"ON", "INPROGRESS", "SUSPENDED"};
+	char *autopm_state[] = {"NONE", "ON", "INPROGRESS", "SUSPENDED"};
 	unsigned int msecs_age;
 	int pm_state = atomic_read(&sc->pm_state);
+	unsigned long timer_expires;
 
-	seq_printf(s, "%20s: %s\n", "Runtime PM state",
+	seq_printf(s, "%30s: %s\n", "Runtime PM state",
 			autopm_state[pm_state]);
-	seq_printf(s, "%20s: %pf\n", "Last Resume Caller",
+	seq_printf(s, "%30s: %pf\n", "Last Resume Caller",
 			sc->pm_stats.last_resume_caller);
 
 	if (pm_state == HIF_PM_RUNTIME_STATE_SUSPENDED) {
 		msecs_age = jiffies_to_msecs(jiffies - sc->pm_stats.suspend_jiffies);
-		seq_printf(s, "%20s: %d.%03ds\n", "Suspended Since",
+		seq_printf(s, "%30s: %d.%03ds\n", "Suspended Since",
 				msecs_age / 1000, msecs_age % 1000);
 	}
 
-	seq_printf(s, "%20s: %d\n", "PM Usage count",
+	seq_printf(s, "%30s: %d\n", "PM Usage count",
 			atomic_read(&sc->dev->power.usage_count));
 
 	HIF_PCI_AUTOPM_STATS(s, sc, suspended);
@@ -799,6 +820,14 @@ static int hif_pci_autopm_debugfs_show(struct seq_file *s, void *data)
 	HIF_PCI_AUTOPM_STATS(s, sc, request_resume);
 	HIF_PCI_AUTOPM_STATS(s, sc, prevent_suspend);
 	HIF_PCI_AUTOPM_STATS(s, sc, allow_suspend);
+	HIF_PCI_AUTOPM_STATS(s, sc, prevent_suspend_timeout);
+	HIF_PCI_AUTOPM_STATS(s, sc, allow_suspend_timeout);
+	timer_expires = sc->runtime_timer_expires;
+	if (timer_expires > 0) {
+		msecs_age = jiffies_to_msecs(timer_expires - jiffies);
+		seq_printf(s, "%30s: %d.%03ds\n", "Prevent suspend timeout",
+				msecs_age / 1000, msecs_age % 1000);
+	}
 	return 0;
 #undef HIF_PCI_AUTOPM_STATS
 }
@@ -1008,6 +1037,39 @@ static inline void hif_pci_pm_debugfs(struct hif_pci_softc *sc, bool init)
 }
 #endif
 
+static void hif_pci_runtime_pm_timeout_fn(unsigned long data)
+{
+	struct hif_pci_softc *hif_sc = (struct hif_pci_softc *)data;
+	unsigned long flags;
+	unsigned long timer_expires;
+
+	spin_lock_irqsave(&hif_sc->runtime_lock, flags);
+
+	timer_expires = hif_sc->runtime_timer_expires;
+
+	/* Make sure we are not called too early, this should take care of
+	 * following case
+	 *
+	 * CPU0                         CPU1 (timeout function)
+         * ----                         ----------------------
+	 * spin_lock_irq
+	 *                              timeout function called
+	 *
+	 * mod_timer()
+	 *
+	 * spin_unlock_irq
+	 *                              spin_lock_irq
+	 */
+	if (timer_expires > 0 && !time_after(timer_expires, jiffies)) {
+
+		hif_sc->runtime_timer_expires = 0;
+		hif_pm_runtime_put_auto(hif_sc->dev);
+		hif_sc->pm_stats.allow_suspend_timeout++;
+	}
+
+	spin_unlock_irqrestore(&hif_sc->runtime_lock, flags);
+}
+
 static void hif_pci_pm_runtime_init(struct hif_pci_softc *sc)
 {
 	struct ol_softc *ol_sc;
@@ -1028,6 +1090,10 @@ static void hif_pci_pm_runtime_init(struct hif_pci_softc *sc)
 
 	pr_info("%s: Enabling RUNTIME PM, Delay: %d ms\n", __func__,
 			ol_sc->runtime_pm_delay);
+
+	spin_lock_init(&sc->runtime_lock);
+	setup_timer(&sc->runtime_timer, hif_pci_runtime_pm_timeout_fn,
+			(unsigned long)sc);
 
 	adf_os_atomic_init(&sc->pm_state);
 	adf_os_atomic_set(&sc->pm_state, HIF_PM_RUNTIME_STATE_ON);
@@ -1052,6 +1118,14 @@ static void hif_pci_pm_runtime_exit(struct hif_pci_softc *sc)
 	hif_pm_runtime_resume(sc->dev);
 	cnss_runtime_exit(sc->dev);
 	hif_pci_pm_debugfs(sc, false);
+	adf_os_atomic_set(&sc->pm_state, HIF_PM_RUNTIME_STATE_NONE);
+
+	del_timer_sync(&sc->runtime_timer);
+
+	if (sc->runtime_timer_expires > 0) {
+		hif_pm_runtime_put_auto(sc->dev);
+		sc->runtime_timer_expires = 0;
+	}
 }
 #else
 static inline void hif_pci_pm_runtime_init(struct hif_pci_softc *sc) { }
@@ -2200,11 +2274,13 @@ __hif_pci_suspend(struct pci_dev *pdev, pm_message_t state, bool runtime_pm)
     }
 
     if (wma_check_scan_in_progress(temp_module)) {
-        printk("%s: Scan in progress. Aborting suspend\n", __func__);
+        printk("%s: Scan in progress. Aborting suspend%s\n", __func__,
+                runtime_pm ? " for runtime PM" : "");
         goto out;
     }
 
-    printk("%s: wow mode %d event %d\n", __func__,
+    printk("%s: %swow mode %d event %d\n", __func__,
+            runtime_pm ? "for runtime pm " : "",
        wma_is_wow_mode_selected(temp_module), state.event);
 
     if (wma_is_wow_mode_selected(temp_module)) {
@@ -2295,7 +2371,8 @@ __hif_pci_suspend(struct pci_dev *pdev, pm_message_t state, bool runtime_pm)
         pci_write_config_dword(pdev, OL_ATH_PCI_PM_CONTROL, (val & 0xffffff00) | 0x03);
     }
 
-    printk("%s: Suspend completes\n", __func__);
+    printk("%s: Suspend completes%s\n", __func__,
+            runtime_pm ? " for runtime pm" : "");
     ret = 0;
 
 out:
@@ -2375,7 +2452,7 @@ __hif_pci_resume(struct pci_dev *pdev, bool runtime_pm)
     /* Set bus master bit in PCI_COMMAND to enable DMA */
     pci_set_master(pdev);
 
-    printk("\n%s: Rome PS: %d", __func__, val);
+    printk("%s: Rome PS: %d\n", __func__, val);
 
 #ifdef CONFIG_CNSS
     /* Keep PCIe bus driver's shadow memory intact */
@@ -2400,8 +2477,9 @@ __hif_pci_resume(struct pci_dev *pdev, bool runtime_pm)
         goto out;
     }
 
-    printk("%s: wow mode %d val %d\n", __func__,
-       wma_is_wow_mode_selected(temp_module), val);
+    printk("%s: %swow mode %d val %d\n", __func__,
+            runtime_pm ? "for runtime pm " : "",
+            wma_is_wow_mode_selected(temp_module), val);
 
     adf_os_atomic_set(&sc->wow_done, 0);
 
@@ -2422,7 +2500,8 @@ __hif_pci_resume(struct pci_dev *pdev, bool runtime_pm)
 #endif
 
 out:
-    printk("%s: Resume completes %d\n", __func__, err);
+    printk("%s: Resume completes%s %d\n", __func__,
+            runtime_pm ? " for runtime pm" : "", err);
 
     if (err)
         return (-1);

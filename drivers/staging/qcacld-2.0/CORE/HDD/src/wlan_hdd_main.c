@@ -649,7 +649,7 @@ end:
 }
 #endif
 
-static int hdd_netdev_notifier_call(struct notifier_block * nb,
+static int __hdd_netdev_notifier_call(struct notifier_block * nb,
                                          unsigned long state,
                                          void *data)
 {
@@ -761,6 +761,27 @@ static int hdd_netdev_notifier_call(struct notifier_block * nb,
    }
 
    return NOTIFY_DONE;
+}
+
+/**
+ * hdd_netdev_notifier_call() - netdev notifier callback function
+ * @nb: pointer to notifier block
+ * @state: state
+ * @ndev: ndev pointer
+ *
+ * Return: 0 on success, error number otherwise.
+ */
+static int hdd_netdev_notifier_call(struct notifier_block * nb,
+					unsigned long state,
+					void *ndev)
+{
+	int ret;
+
+	vos_ssr_protect(__func__);
+	ret = __hdd_netdev_notifier_call(nb, state, ndev);
+	vos_ssr_unprotect(__func__);
+
+	return ret;
 }
 
 struct notifier_block hdd_netdev_notifier = {
@@ -8604,6 +8625,9 @@ void hdd_cleanup_actionframe( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter )
          VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
                    "%s HDD Wait for Action Confirmation Failed!!",
                    __func__);
+         /* Inform tx status as FAILURE to upper layer and free
+          * cfgState->buf */
+         hdd_sendActionCnf( pAdapter, FALSE );
       }
    }
    return;
@@ -9098,13 +9122,6 @@ hdd_adapter_t* hdd_open_adapter( hdd_context_t *pHddCtx, tANI_U8 session_type,
          //netif_tx_disable(pWlanDev);
          netif_carrier_off(pAdapter->dev);
 
-         if (WLAN_HDD_P2P_CLIENT == session_type ||
-                 WLAN_HDD_P2P_DEVICE == session_type) {
-             /* Initialize the work queue to defer the
-              * back to back RoC request */
-             INIT_DELAYED_WORK(&pAdapter->roc_work, hdd_p2p_roc_work_queue);
-         }
-
 #ifdef QCA_LL_TX_FLOW_CT
          /* SAT mode default TX Flow control instance
           * This instance will be used for
@@ -9156,11 +9173,6 @@ hdd_adapter_t* hdd_open_adapter( hdd_context_t *pHddCtx, tANI_U8 session_type,
          netif_carrier_off(pAdapter->dev);
 
          hdd_set_conparam( 1 );
-         if (WLAN_HDD_P2P_GO == session_type) {
-             /* Initialize the work queue to
-              * defer the back to back RoC request */
-             INIT_DELAYED_WORK(&pAdapter->roc_work, hdd_p2p_roc_work_queue);
-         }
 
          break;
       }
@@ -9598,11 +9610,6 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
 
    ENTER();
 
-   if (pHddCtx->isLogpInProgress) {
-       hddLog(LOG1, FL("LOGP in Progress. Ignore!!!"));
-       return VOS_STATUS_E_FAILURE;
-   }
-
    netif_tx_disable(pAdapter->dev);
    netif_carrier_off(pAdapter->dev);
    switch(pAdapter->device_mode)
@@ -9610,7 +9617,8 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
       case WLAN_HDD_INFRA_STATION:
       case WLAN_HDD_P2P_CLIENT:
       case WLAN_HDD_P2P_DEVICE:
-         if( hdd_connIsConnected( WLAN_HDD_GET_STATION_CTX_PTR( pAdapter )) )
+         if (hdd_connIsConnected(WLAN_HDD_GET_STATION_CTX_PTR(pAdapter)) ||
+            hdd_is_connecting(WLAN_HDD_GET_STATION_CTX_PTR(pAdapter)))
          {
             if (pWextState->roamProfile.BSSType == eCSR_BSS_TYPE_START_IBSS)
                 halStatus = sme_RoamDisconnect(pHddCtx->hHal,
@@ -9649,17 +9657,8 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
          }
          if (pAdapter->device_mode != WLAN_HDD_INFRA_STATION) {
              wlan_hdd_cleanup_remain_on_channel_ctx(pAdapter);
-#ifdef WLAN_OPEN_SOURCE
-             cancel_delayed_work_sync(&pAdapter->roc_work);
-#endif
          }
 
-         if (pAdapter->ipv4_notifier_registered)
-         {
-             hddLog(LOG1, FL("Unregistered IPv4 notifier"));
-             unregister_inetaddr_notifier(&pAdapter->ipv4_notifier);
-             pAdapter->ipv4_notifier_registered = false;
-         }
 #ifdef WLAN_OPEN_SOURCE
          cancel_work_sync(&pAdapter->ipv4NotifierWorkQueue);
 #endif
@@ -9680,12 +9679,6 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
 #ifdef WLAN_OPEN_SOURCE
          cancel_work_sync(&pAdapter->ipv6NotifierWorkQueue);
 #endif
-         if (pAdapter->ipv6_notifier_registered)
-         {
-            hddLog(LOG1, FL("Unregistered IPv6 notifier"));
-            unregister_inet6addr_notifier(&pAdapter->ipv6_notifier);
-            pAdapter->ipv6_notifier_registered = false;
-         }
 #endif
          /* It is possible that the caller of this function does not
           * wish to close the session
@@ -9715,9 +9708,6 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
          //Any softap specific cleanup here...
          if (pAdapter->device_mode == WLAN_HDD_P2P_GO) {
              wlan_hdd_cleanup_remain_on_channel_ctx(pAdapter);
-#ifdef WLAN_OPEN_SOURCE
-             cancel_delayed_work_sync(&pAdapter->roc_work);
-#endif
          }
 
 #ifdef QCA_LL_TX_FLOW_CT
@@ -10869,6 +10859,60 @@ VOS_STATUS hdd_abort_mac_scan_all_adapters(hdd_context_t *pHddCtx)
     return VOS_STATUS_SUCCESS;
 }
 
+#ifdef WLAN_NS_OFFLOAD
+/**
+ * hdd_wlan_unregister_ip6_notifier() - unregister IP6 change notifier
+ * @hdd_ctx: Pointer to hdd context
+ *
+ * Return: None
+ */
+static void hdd_wlan_unregister_ip6_notifier(hdd_context_t *hdd_ctx)
+{
+	unregister_inet6addr_notifier(&hdd_ctx->ipv6_notifier);
+
+	return;
+}
+
+/**
+ * hdd_wlan_register_ip6_notifier() - register IP6 change notifier
+ * @hdd_ctx: Pointer to hdd context
+ *
+ * Return: None
+ */
+static void hdd_wlan_register_ip6_notifier(hdd_context_t *hdd_ctx)
+{
+	int ret;
+
+	hdd_ctx->ipv6_notifier.notifier_call = wlan_hdd_ipv6_changed;
+	ret = register_inet6addr_notifier(&hdd_ctx->ipv6_notifier);
+	if (ret)
+		hddLog(LOGE, FL("Failed to register IPv6 notifier"));
+	else
+		hddLog(LOGE, FL("Registered IPv6 notifier"));
+
+	return;
+}
+#else
+/**
+ * hdd_wlan_unregister_ip6_notifier() - unregister IP6 change notifier
+ * @hdd_ctx: Pointer to hdd context
+ *
+ * Return: None
+ */
+static void hdd_wlan_unregister_ip6_notifier(hdd_context_t *hdd_ctx)
+{
+}
+/**
+ * hdd_wlan_register_ip6_notifier() - register IP6 change notifier
+ * @hdd_ctx: Pointer to hdd context
+ *
+ * Return: None
+ */
+static void hdd_wlan_register_ip6_notifier(hdd_context_t *hdd_ctx)
+{
+}
+#endif
+
 /**---------------------------------------------------------------------------
 
   \brief hdd_wlan_exit() - HDD WLAN exit function
@@ -10891,6 +10935,11 @@ void hdd_wlan_exit(hdd_context_t *pHddCtx)
    hdd_config_t *pConfig = pHddCtx->cfg_ini;
 
    ENTER();
+
+   hddLog(LOGE, FL("Unregister IPv6 notifier"));
+   hdd_wlan_unregister_ip6_notifier(pHddCtx);
+   hddLog(LOGE, FL("Unregister IPv4 notifier"));
+   unregister_inetaddr_notifier(&pHddCtx->ipv4_notifier);
 
    if (VOS_FTM_MODE != hdd_get_conparam())
    {
@@ -11362,19 +11411,20 @@ VOS_STATUS hdd_post_voss_start_config(hdd_context_t* pHddCtx)
 }
 
 /* wake lock APIs for HDD */
-void hdd_prevent_suspend(void)
+void hdd_prevent_suspend(uint32_t reason)
 {
-    vos_wake_lock_acquire(&wlan_wake_lock);
+	vos_wake_lock_acquire(&wlan_wake_lock, reason);
 }
 
-void hdd_allow_suspend(void)
+void hdd_allow_suspend(uint32_t reason)
 {
-    vos_wake_lock_release(&wlan_wake_lock);
+	vos_wake_lock_release(&wlan_wake_lock, reason);
 }
 
-void hdd_prevent_suspend_timeout(v_U32_t timeout)
+void hdd_prevent_suspend_timeout(v_U32_t timeout, uint32_t reason)
 {
-    vos_wake_lock_timeout_acquire(&wlan_wake_lock, timeout);
+	vos_wake_lock_timeout_acquire(&wlan_wake_lock, timeout,
+                                      reason);
 }
 
 /**---------------------------------------------------------------------------
@@ -12050,24 +12100,6 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
       goto err_wiphy_unregister;
    }
 
-   ret = process_wma_set_command(0, GEN_PARAM_TX_CHAIN_MASK_CCK,
-                                 pHddCtx->cfg_ini->tx_chain_mask_cck,
-                                 GEN_CMD);
-   if (0 != ret) {
-       hddLog(VOS_TRACE_LEVEL_ERROR,
-              "%s: set GEN_PARAM_TX_CHAIN_MASK_CCK failed %d",
-              __func__, ret);
-   }
-
-   ret = process_wma_set_command(0, WMI_PDEV_PARAM_TX_CHAIN_MASK_1SS,
-                                 pHddCtx->cfg_ini->tx_chain_mask_1ss,
-                                 PDEV_CMD);
-   if (0 != ret) {
-       hddLog(VOS_TRACE_LEVEL_ERROR,
-              "%s: WMI_PDEV_PARAM_TX_CHAIN_MASK_1SS failed %d",
-              __func__, ret);
-   }
-
    status = hdd_set_sme_chan_list(pHddCtx);
    if (status != VOS_STATUS_SUCCESS) {
       hddLog(VOS_TRACE_LEVEL_FATAL,
@@ -12564,10 +12596,27 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
    /* Initialize the RoC Request queue and work. */
    hdd_list_init((&pHddCtx->hdd_roc_req_q), MAX_ROC_REQ_QUEUE_ENTRY);
 #ifdef CONFIG_CNSS
-   cnss_init_work(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
+   cnss_init_delayed_work(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
 #else
-   INIT_WORK(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
+   INIT_DELAYED_WORK(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
 #endif
+
+   /*
+    * Register IPv6 notifier to notify if any change in IP
+    * So that we can reconfigure the offload parameters
+    */
+   hdd_wlan_register_ip6_notifier(pHddCtx);
+
+   /*
+    * Register IPv4 notifier to notify if any change in IP
+    * So that we can reconfigure the offload parameters
+    */
+   pHddCtx->ipv4_notifier.notifier_call = wlan_hdd_ipv4_changed;
+   ret = register_inetaddr_notifier(&pHddCtx->ipv4_notifier);
+   if (ret)
+      hddLog(LOGE, FL("Failed to register IPv4 notifier"));
+   else
+      hddLog(LOGE, FL("Registered IPv4 notifier"));
 
    complete(&wlan_start_comp);
    goto success;
@@ -12721,7 +12770,7 @@ static int hdd_driver_init( void)
    ENTER();
 
    vos_wake_lock_init(&wlan_wake_lock, "wlan");
-   hdd_prevent_suspend();
+   hdd_prevent_suspend(WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT);
    /*
     * The Krait is going to Idle/Stand Alone Power Save
     * more aggressively which is resulting in the longer driver load time.
@@ -12743,7 +12792,7 @@ static int hdd_driver_init( void)
                           WLAN_MODULE_NAME);
          if (ret_status < 0) {
             hdd_remove_pm_qos();
-            hdd_allow_suspend();
+            hdd_allow_suspend(WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT);
             vos_wake_lock_destroy(&wlan_wake_lock);
          }
          return ret_status;
@@ -12754,7 +12803,7 @@ static int hdd_driver_init( void)
                          &wlan_wake_lock, WLAN_MODULE_NAME);
          if (ret_status < 0) {
             hdd_remove_pm_qos();
-            hdd_allow_suspend();
+            hdd_allow_suspend(WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT);
             vos_wake_lock_destroy(&wlan_wake_lock);
          }
          return ret_status;
@@ -12807,7 +12856,7 @@ static int hdd_driver_init( void)
    }
 
    hdd_remove_pm_qos();
-   hdd_allow_suspend();
+   hdd_allow_suspend(WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT);
 
    if (ret_status) {
        hddLog(VOS_TRACE_LEVEL_FATAL, "%s: WLAN Driver Initialization failed",

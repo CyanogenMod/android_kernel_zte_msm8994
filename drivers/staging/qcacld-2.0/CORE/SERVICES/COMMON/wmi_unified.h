@@ -530,6 +530,8 @@ typedef enum {
     WMI_EXTWOW_SET_APP_TYPE1_PARAMS_CMDID,
     /* Extend WoW command to configure app type2 parameter */
     WMI_EXTWOW_SET_APP_TYPE2_PARAMS_CMDID,
+    /* enable ICMPv6 Network advertisement filtering */
+    WMI_WOW_ENABLE_ICMPV6_NA_FLT_CMDID,
 
     /* RTT measurement related cmd */
     /** reques to make an RTT measurement */
@@ -564,6 +566,9 @@ typedef enum {
 
     /** Request to flush of the buffered debug messages */
     WMI_DEBUG_MESG_FLUSH_CMDID,
+
+    /** Cmd to configure the verbose level */
+    WMI_DIAG_EVENT_LOG_CONFIG_CMDID,
 
     /** ARP OFFLOAD REQUEST*/
     WMI_SET_ARP_NS_OFFLOAD_CMDID=WMI_CMD_GRP_START_ID(WMI_GRP_ARP_NS_OFL),
@@ -665,8 +670,8 @@ typedef enum {
 
     /* FWTEST Commands */
     WMI_FWTEST_VDEV_MCC_SET_TBTT_MODE_CMDID=WMI_CMD_GRP_START_ID(WMI_GRP_FWTEST),
-	/** set NoA descs **/
-	WMI_FWTEST_P2P_SET_NOA_PARAM_CMDID,
+    /** set NoA descs **/
+    WMI_FWTEST_P2P_SET_NOA_PARAM_CMDID,
     /* UNIT Tests  */
     WMI_UNIT_TEST_CMDID,
 
@@ -796,7 +801,7 @@ typedef enum {
     /* System-On-Chip commands */
     WMI_SOC_SET_PCL_CMDID = WMI_CMD_GRP_START_ID(WMI_GRP_SOC),
     WMI_SOC_SET_HW_MODE_CMDID,
-
+    WMI_SOC_SET_DUAL_MAC_CONFIG_CMDID,
 } WMI_CMD_ID;
 
 typedef enum {
@@ -943,7 +948,10 @@ typedef enum {
     /**  Firmware memory dump Complete event*/
     WMI_UPDATE_FW_MEM_DUMP_EVENTID,
 
-    /*NLO specific events*/
+    /** Event indicating the DIAG logs/events supported by FW */
+    WMI_DIAG_EVENT_LOG_SUPPORTED_EVENTID,
+
+    /* NLO specific events */
     /** NLO match event after the first match */
     WMI_NLO_MATCH_EVENTID = WMI_EVT_GRP_START_ID(WMI_GRP_NLO_OFL),
 
@@ -1089,6 +1097,7 @@ typedef enum {
     /* System-On-Chip events */
     WMI_SOC_SET_HW_MODE_RESP_EVENTID = WMI_EVT_GRP_START_ID(WMI_GRP_SOC),
     WMI_SOC_HW_MODE_TRANSITION_EVENTID,
+    WMI_SOC_SET_DUAL_MAC_CONFIG_RESP_EVENTID,
 } WMI_EVT_ID;
 
 /* defines for OEM message sub-types */
@@ -1337,6 +1346,44 @@ WMI_CHANNEL_CHANGE_CAUSE_CSA,
 #define WMI_DBS_HW_MODE_AGILE_DFS_GET(hw_mode)          \
     ((hw_mode & WMI_DBS_HW_MODE_AGILE_DFS_MODE_MASK) >> WMI_DBS_HW_MODE_AGILE_DFS_MODE_BITPOS)
 
+#define WMI_DBS_CONC_SCAN_CFG_DBS_SCAN_BITPOS    (31)
+#define WMI_DBS_CONC_SCAN_CFG_DBS_PLUS_AGILE_SCAN_BITPOS   (30)
+#define WMI_DBS_CONC_SCAN_CFG_SINGLE_MAC_SCAN_WITH_DFS_BITPOS  (29)
+
+#define WMI_DBS_CONC_SCAN_CFG_DBS_SCAN_MASK    (0x1 << WMI_DBS_CONC_SCAN_CFG_DBS_SCAN_BITPOS)
+#define WMI_DBS_CONC_SCAN_CFG_DBS_PLUS_AGILE_SCAN_MASK   (0x1 << WMI_DBS_CONC_SCAN_CFG_DBS_PLUS_AGILE_SCAN_BITPOS)
+#define WMI_DBS_CONC_SCAN_CFG_SINGLE_MAC_SCAN_WITH_DFS_MASK  (0x1 << WMI_DBS_CONC_SCAN_CFG_SINGLE_MAC_SCAN_WITH_DFS_BITPOS)
+
+#define WMI_DBS_CONC_SCAN_CFG_DBS_SCAN_SET(scan_cfg, value) \
+    (scan_cfg |= ((value << WMI_DBS_CONC_SCAN_CFG_DBS_SCAN_BITPOS) & WMI_DBS_CONC_SCAN_CFG_DBS_SCAN_MASK))
+#define WMI_DBS_CONC_SCAN_CFG_DBS_PLUS_AGILE_SCAN_SET(scan_cfg, value) \
+    (scan_cfg |= ((value << WMI_DBS_CONC_SCAN_CFG_DBS_PLUS_AGILE_SCAN_BITPOS) & WMI_DBS_CONC_SCAN_CFG_DBS_PLUS_AGILE_SCAN_MASK))
+#define WMI_DBS_CONC_SCAN_CFG_SINGLE_MAC_SCAN_WITH_DFS_SET(scan_cfg, value) \
+    (scan_cfg |= ((value << WMI_DBS_CONC_SCAN_CFG_SINGLE_MAC_SCAN_WITH_DFS_BITPOS) & WMI_DBS_CONC_SCAN_CFG_SINGLE_MAC_SCAN_WITH_DFS_MASK))
+
+#define WMI_DBS_CONC_SCAN_CFG_DBS_SCAN_GET(scan_cfg)    \
+    ((scan_cfg & WMI_DBS_CONC_SCAN_CFG_DBS_SCAN_MASK) >> WMI_DBS_CONC_SCAN_CFG_DBS_SCAN_BITPOS)
+#define WMI_DBS_CONC_SCAN_CFG_DBS_PLUS_AGILE_SCAN_GET(scan_cfg)    \
+    ((scan_cfg & WMI_DBS_CONC_SCAN_CFG_DBS_PLUS_AGILE_SCAN_MASK) >> WMI_DBS_CONC_SCAN_CFG_DBS_PLUS_AGILE_SCAN_BITPOS)
+#define WMI_DBS_CONC_SCAN_CFG_SINGLE_MAC_SCAN_WITH_DFS_GET(scan_cfg)    \
+    ((scan_cfg & WMI_DBS_CONC_SCAN_CFG_SINGLE_MAC_SCAN_WITH_DFS_MASK) >> WMI_DBS_CONC_SCAN_CFG_SINGLE_MAC_SCAN_WITH_DFS_BITPOS)
+
+#define WMI_DBS_FW_MODE_CFG_DBS_BITPOS          (31)
+#define WMI_DBS_FW_MODE_CFG_AGILE_DFS_BITPOS    (30)
+
+#define WMI_DBS_FW_MODE_CFG_DBS_MASK          (0x1 << WMI_DBS_FW_MODE_CFG_DBS_BITPOS)
+#define WMI_DBS_FW_MODE_CFG_AGILE_DFS_MASK    (0x1 << WMI_DBS_FW_MODE_CFG_AGILE_DFS_BITPOS)
+
+#define WMI_DBS_FW_MODE_CFG_DBS_SET(fw_mode, value) \
+    (fw_mode |= ((value << WMI_DBS_FW_MODE_CFG_DBS_BITPOS) & WMI_DBS_FW_MODE_CFG_DBS_MASK))
+#define WMI_DBS_FW_MODE_CFG_AGILE_DFS_SET(fw_mode, value) \
+    (fw_mode |= ((value << WMI_DBS_FW_MODE_CFG_AGILE_DFS_BITPOS) & WMI_DBS_FW_MODE_CFG_AGILE_DFS_MASK))
+
+#define WMI_DBS_FW_MODE_CFG_DBS_GET(fw_mode)    \
+    ((fw_mode & WMI_DBS_FW_MODE_CFG_DBS_MASK) >> WMI_DBS_FW_MODE_CFG_DBS_BITPOS)
+#define WMI_DBS_FW_MODE_CFG_AGILE_DFS_GET(fw_mode)    \
+    ((fw_mode & WMI_DBS_FW_MODE_CFG_AGILE_DFS_MAS) >> WMI_DBS_FW_MODE_CFG_AGILE_DFS_BITPOS)
+
 /** NOTE: This structure cannot be extended in the future without breaking WMI compatibility */
 typedef struct _wmi_abi_version {
     A_UINT32    abi_version_0;   /** WMI Major and Minor versions */
@@ -1425,6 +1472,11 @@ typedef struct {
      *
      */
     A_UINT32 txrx_chainmask;
+
+    /*
+     * default Dual Band Simultaneous (DBS) hardware mode
+     */
+    A_UINT32 default_dbs_hw_mode_index;
 
     /* The TLVs for hal_reg_capabilities, wmi_service_bitmap and mem_reqs[] will follow this TLV.
          *     HAL_REG_CAPABILITIES   hal_reg_capabilities;
@@ -3121,6 +3173,39 @@ typedef struct {
 /** Default value for stats if the stats collection has not started */
 #define WMI_STATS_VALUE_INVALID       0xffffffff
 
+#define WMI_DIAG_ID_GET(diag_events_logs)                         WMI_GET_BITS(diag_events_logs, 0, 16)
+#define WMI_DIAG_ID_SET(diag_events_logs, value)                  WMI_SET_BITS(diag_events_logs, 0, 16, value)
+#define WMI_DIAG_TYPE_GET(diag_events_logs)                       WMI_GET_BITS(diag_events_logs, 16, 1)
+#define WMI_DIAG_TYPE_SET(diag_events_logs, value)                WMI_SET_BITS(diag_events_logs, 16, 1, value)
+#define WMI_DIAG_ID_ENABLED_DISABLED_GET(diag_events_logs)        WMI_GET_BITS(diag_events_logs, 17, 1)
+#define WMI_DIAG_ID_ENABLED_DISABLED_SET(diag_events_logs, value) WMI_SET_BITS(diag_events_logs, 17, 1, value)
+
+typedef struct {
+    A_UINT32 tlv_header; /** TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_diag_event_log_config_fixed_param */
+    A_UINT32 num_of_diag_events_logs;
+/* The TLVs will follow.
+ *    A_UINT32 diag_events_logs_list[]; 0-15 Bits Diag EVENT/LOG ID,
+ *                                      Bit 16 - DIAG type EVENT/LOG, 0 - Event, 1 - LOG
+ *                                      Bit 17 Indicate if the DIAG type is Enabled/Disabled.
+ */
+} wmi_diag_event_log_config_fixed_param;
+
+#define WMI_DIAG_FREQUENCY_GET(diag_events_logs)          WMI_GET_BITS(diag_events_logs, 17, 1)
+#define WMI_DIAG_FREQUENCY_SET(diag_events_logs, value)   WMI_SET_BITS(diag_events_logs, 17, 1, value)
+#define WMI_DIAG_EXT_FEATURE_GET(diag_events_logs)        WMI_GET_BITS(diag_events_logs, 18, 1)
+#define WMI_DIAG_EXT_FEATURE_SET(diag_events_logs, value) WMI_SET_BITS(diag_events_logs, 18, 1, value)
+
+typedef struct {
+    A_UINT32 tlv_header;
+    A_UINT32 num_of_diag_events_logs;
+/* The TLVs will follow.
+ *    A_UINT32 diag_events_logs_list[]; 0-15 Bits Diag EVENT/LOG ID,
+ *                                      Bit 16 - DIAG type EVENT/LOG, 0 - Event, 1 - LOG
+ *                                      Bit 17 - Frequncy of the DIAG EVENT/LOG High Frequency -1, Low Frequency - 0
+ *                                      Bit 18 - Set if the EVENTS/LOGs are used for EXT DEBUG Framework
+ */
+} wmi_diag_event_log_supported_event_fixed_params;
+
 typedef struct {
     A_UINT32 tlv_header; /** TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_debug_mesg_flush_fixed_param*/
     A_UINT32 reserved0; /** placeholder for future */
@@ -4093,6 +4178,10 @@ typedef enum {
     /** disconnect threshold, once the consecutive error for specific peer
       * exceed this threhold, FW will send kickout event to host */
     WMI_VDEV_PARAM_DISCONNECT_TH,
+
+    /** The rate_code of RTS_CTS changed by host. Now FW can support
+     * more non-HT rates rather than 1Mbps or 6Mbps */
+    WMI_VDEV_PARAM_RTSCTS_RATE,
 
 } WMI_VDEV_PARAM;
 
@@ -5370,6 +5459,10 @@ typedef struct {
     A_UINT32 hirssi_scan_delta;
     /** 5G scan upper bound */
     A_UINT32 hirssi_upper_bound;
+    /* The TLVs will follow.
+     * wmi_roam_scan_extended_threshold_param extended_param;
+     * wmi_roam_earlystop_rssi_thres_param earlystop_param;
+     */
 } wmi_roam_scan_rssi_threshold_fixed_param;
 
 #define WMI_ROAM_5G_BOOST_PENALIZE_ALGO_FIXED  0x0
@@ -5514,6 +5607,21 @@ typedef struct {
     /** mcast/group management frames cipher set */
     A_UINT32               rsn_mcastmgmtcipherset;
 } wmi_ap_profile;
+
+/** Support early stop roaming scanning when finding a strong candidate AP
+ * A 'strong' candidate is
+ * 1) Is eligible candidate
+ *    (all conditions are met in existing candidate selection).
+ * 2) Its rssi is better than earlystop threshold.
+ *    Earlystop threshold will be relaxed as each channel is scanned.
+ */
+typedef struct {
+    A_UINT32 tlv_header;
+    /* Minimum RSSI threshold value for early stop, unit is dB above NF. */
+    A_UINT32 roam_earlystop_thres_min;
+    /* Maminum RSSI threshold value for early stop, unit is dB above NF. */
+    A_UINT32 roam_earlystop_thres_max;
+} wmi_roam_earlystop_rssi_thres_param;
 
 /** Beacon filter wmi command info */
 
@@ -6135,6 +6243,10 @@ when comparing wifi header.*/
 #define WOW_DEFAULT_IOAC_RANDOM_SIZE_DWORD 2
 #define WOW_DEFAULT_IOAC_KEEP_ALIVE_PKT_SIZE   120
 #define WOW_DEFAULT_IOAC_KEEP_ALIVE_PKT_SIZE_DWORD 30
+#define WOW_DEFAULT_IOAC_SOCKET_PATTERN_SIZE  32
+#define WOW_DEFAULT_IOAC_SOCKET_PATTERN_SIZE_DWORD 8
+#define WOW_DEFAULT_IOAC_KEEP_ALIVE_PKT_REV_SIZE       32
+#define WOW_DEFAULT_IOAC_KEEP_ALIVE_PKT_REV_SIZE_DWORD 8
 
 typedef enum pattern_type_e {
     WOW_PATTERN_MIN = 0,
@@ -6147,6 +6259,7 @@ typedef enum pattern_type_e {
     WOW_IPV6_RA_PATTERN,
     WOW_IOAC_PKT_PATTERN,
     WOW_IOAC_TMR_PATTERN,
+    WOW_IOAC_SOCK_PATTERN,
     WOW_PATTERN_MAX
 }WOW_PATTERN_TYPE;
 
@@ -6177,6 +6290,9 @@ typedef enum event_type_e {
     WOW_CLIENT_KICKOUT_EVENT,
     WOW_NAN_EVENT,
     WOW_EXTSCAN_EVENT,
+    WOW_IOAC_REV_KA_FAIL_EVENT,
+    WOW_IOAC_SOCK_EVENT,
+    WOW_NLO_SCAN_COMPLETE_EVENT,
 } WOW_WAKE_EVENT_TYPE;
 
 typedef enum wake_reason_e {
@@ -6212,6 +6328,9 @@ typedef enum wake_reason_e {
     WOW_REASON_NAN_EVENT,
     WOW_REASON_EXTSCAN,
     WOW_REASON_RSSI_BREACH_EVENT,
+    WOW_REASON_IOAC_REV_KA_FAIL_EVENT,
+    WOW_REASON_IOAC_SOCK_EVENT,
+    WOW_REASON_NLO_SCAN_COMPLETE,
     WOW_REASON_DEBUG_TEST = 0xFF,
 } WOW_WAKE_REASON_TYPE;
 
@@ -6231,6 +6350,15 @@ typedef struct {
     /** Reserved for future use */
     A_UINT32    reserved0;
 } wmi_wow_hostwakeup_from_sleep_cmd_fixed_param;
+
+#define WOW_ICMPV6_NA_FILTER_DISABLE 0
+#define WOW_ICMPV6_NA_FILTER_ENABLE 1
+
+typedef struct {
+    A_UINT32 tlv_header; /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_wow_enable_icmpv6_na_flt_cmd_fixed_param  */
+    A_UINT32 vdev_id;
+    A_UINT32 enable; /* WOW_ICMPV6_NA_FILTER_ENABLE/DISABLE */
+} wmi_wow_enable_icmpv6_na_flt_cmd_fixed_param;
 
 typedef struct bitmap_pattern_s {
     A_UINT32     tlv_header;     /** TLV tag and len; tag equals WMITLV_TAG_STRUC_WOW_BITMAP_PATTERN_T */
@@ -6270,6 +6398,17 @@ typedef enum wow_ioac_pattern_type {
     WOW_IOAC_EXTEND_PATTERN,
 } WOW_IOAC_PATTERN_TYPE;
 
+typedef struct ioac_sock_pattern_s {
+    A_UINT32 tlv_header; /** TLV tag and len; tag equals WMITLV_TAG_STRUC_WOW_IOAC_SOCK_PATTERN_T */
+    A_UINT32 id;
+    A_UINT32 local_ipv4;
+    A_UINT32 remote_ipv4;
+    A_UINT32 local_port;
+    A_UINT32 remote_port;
+    A_UINT32 pattern_len; /* units = bytes */
+    A_UINT32 pattern[WOW_DEFAULT_IOAC_SOCKET_PATTERN_SIZE_DWORD];
+} WOW_IOAC_SOCK_PATTERN_T;
+
 typedef struct ioac_pkt_pattern_s {
     A_UINT32 tlv_header; /** TLV tag and len; tag equals WMITLV_TAG_STRUC_WOW_IOAC_PKT_PATTERN_T */
     A_UINT32 pattern_type;
@@ -6301,6 +6440,14 @@ typedef struct ioac_keepalive_s {
     A_UINT32 keepalive_pkt_len;
     A_UINT32 period_in_ms;
     A_UINT32 vdev_id;
+    A_UINT32 max_loss_cnt;
+    A_UINT32 local_ipv4;
+    A_UINT32 remote_ipv4;
+    A_UINT32 local_port;
+    A_UINT32 remote_port;
+    A_UINT32 recv_period_in_ms;
+    A_UINT32 rev_ka_size;
+    A_UINT32 rev_ka_data[WOW_DEFAULT_IOAC_KEEP_ALIVE_PKT_REV_SIZE_DWORD];
 } WMI_WOW_IOAC_KEEPALIVE_T;
 
 typedef struct {
@@ -6320,6 +6467,7 @@ typedef struct {
     A_UINT32 tlv_header; /** TLV tag and len; tag equals WMITLV_TAG_STRUC_WMI_WOW_IOAC_DEL_PATTERN_CMD_fixed_param */
     A_UINT32 vdev_id;
     A_UINT32 pattern_type;
+    A_UINT32 pattern_id;
 } WMI_WOW_IOAC_DEL_PATTERN_CMD_fixed_param;
 
 typedef struct {
@@ -6833,6 +6981,28 @@ typedef struct nlo_configured_parameters {
     wmi_nlo_bcast_nw_param bcast_nw_type; /* indicates if the SSID is hidden or not */
 } nlo_configured_parameters;
 
+/* Support channel prediction for PNO scan after scanning top_k_num channels
+ * if stationary_threshold is met.
+ */
+typedef struct nlo_channel_prediction_cfg {
+    /* Enable or disable this feature. */
+    A_UINT32 enable;
+    /* Top K channels will be scanned before deciding whether to further scan
+     * or stop. Minimum value is 3 and maximum is 5. */
+    A_UINT32 top_k_num;
+    /* Preconfigured stationary threshold.
+     * Lesser value means more conservative. Bigger value means more aggressive.
+     * Maximum is 100 and mininum is 0. */
+    A_UINT32 stationary_threshold;
+    /* Periodic full channel scan in milliseconds unit.
+     * After full_scan_period_ms since last full scan, channel prediction
+     * scan is suppressed and will do full scan.
+     * This is to help detecting sudden AP power-on or -off. Value 0 means no
+     * full scan at all (not recommended).
+     */
+    A_UINT32 full_scan_period_ms;
+} nlo_channel_prediction_cfg;
+
 typedef struct wmi_nlo_config {
     A_UINT32    tlv_header;     /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_nlo_config_cmd_fixed_param */
     A_UINT32    flags;
@@ -6852,6 +7022,7 @@ typedef struct wmi_nlo_config {
     /* The TLVs will follow.
         * nlo_configured_parameters nlo_list[];
         * A_UINT32 channel_list[];
+        * nlo_channel_prediction_cfg ch_prediction_cfg;
         */
 
 } wmi_nlo_config_cmd_fixed_param;
@@ -8493,6 +8664,9 @@ typedef struct {
 
     /** For 4-byte aligment padding */
     A_UINT8 reserved;
+
+    /** index of peak magnitude bin (signed) */
+    A_INT32 peak_sidx;
 
 } wmi_dfs_radar_event_fixed_param;
 
@@ -10922,6 +11096,17 @@ typedef struct {
     A_UINT32 hw_mode_index;
 } wmi_soc_set_hw_mode_cmd_fixed_param;
 
+typedef struct {
+    A_UINT32 tlv_header; /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_soc_set_dual_mac_config_cmd_fixed_param */
+    /**  Set Dual MAC Firmware Configuration  **/
+
+    /* Concurrent scan configuration bits */
+    A_UINT32 concurrent_scan_config_bits;
+    /* Firmware mode configuration bits */
+    A_UINT32 fw_mode_config_bits;
+
+} wmi_soc_set_dual_mac_config_cmd_fixed_param;
+
 /** Data structure for information specific to a VDEV to MAC mapping. */
 typedef struct {
     /** TLV tag and len; tag equals
@@ -10977,6 +11162,23 @@ typedef struct {
  */
 } wmi_soc_hw_mode_transition_event_fixed_param;
 
+
+typedef struct {
+    A_UINT32 tlv_header; /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_soc_set_dual_mac_config_response_event_fixed_param */
+    /**  Set Dual MAC Config Response Event  **/
+
+    /* Status for set_dual_mac_config command */
+    /*
+     * Values for Status:
+     *  0 - OK; command successful
+     *  1 - EINVAL; Requested invalid hw_mode
+     *  3 - ENOTSUP; HW mode not supported
+     *  4 - EHARDWARE; HW mode change prevented by hardware
+     *  6 - ECOEX; HW mode change conflict with Coex
+     */
+    A_UINT32 status;
+
+} wmi_soc_set_dual_mac_config_response_event_fixed_param;
 
 /* ADD NEW DEFS HERE */
 

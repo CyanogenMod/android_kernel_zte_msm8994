@@ -147,7 +147,7 @@ v_VOID_t hdd_connSetAuthenticated( hdd_adapter_t *pAdapter, v_U8_t authState )
    pHddStaCtx->conn_info.uIsAuthenticated = authState;
 
    /* Check is pending ROC request or not when auth state changed */
-   schedule_work(&pHddCtx->rocReqWork);
+   schedule_delayed_work(&pHddCtx->rocReqWork, 0);
 }
 
 v_VOID_t hdd_connSetConnectionState( hdd_adapter_t *pAdapter,
@@ -162,7 +162,7 @@ v_VOID_t hdd_connSetConnectionState( hdd_adapter_t *pAdapter,
    pHddStaCtx->conn_info.connState = connState;
 
    /* Check is pending ROC request or not when connection state changed */
-   schedule_work(&pHddCtx->rocReqWork);
+   schedule_delayed_work(&pHddCtx->rocReqWork, 0);
 }
 
 // returns FALSE if not connected.
@@ -200,6 +200,12 @@ static inline v_BOOL_t hdd_connGetConnectionState( hdd_station_ctx_t *pHddStaCtx
 v_BOOL_t hdd_connIsConnected( hdd_station_ctx_t *pHddStaCtx )
 {
    return( hdd_connGetConnectionState( pHddStaCtx, NULL ) );
+}
+
+bool hdd_is_connecting(hdd_station_ctx_t *hdd_sta_ctx)
+{
+	return (hdd_sta_ctx->conn_info.connState ==
+		eConnectionState_Connecting);
 }
 
 eCsrBand hdd_connGetConnectedBand( hdd_station_ctx_t *pHddStaCtx )
@@ -961,8 +967,8 @@ static eHalStatus hdd_DisConnectHandler( hdd_adapter_t *pAdapter, tCsrRoamInfo *
             (pHddCtx->isUnloadInProgress != TRUE))
         {
             hddLog(VOS_TRACE_LEVEL_INFO_HIGH,
-                    "%s: sent disconnected event to nl80211",
-                    __func__);
+                   FL("sent disconnected event to nl80211, rssi: %d"),
+                   pAdapter->rssi);
 #ifdef WLAN_FEATURE_P2P_DEBUG
             if(pAdapter->device_mode == WLAN_HDD_P2P_CLIENT)
             {
@@ -1413,9 +1419,10 @@ static eHalStatus hdd_AssociationCompletionHandler( hdd_adapter_t *pAdapter, tCs
     /* HDD has initiated disconnect, do not send connect result indication
      * to kernel as it will be handled by __cfg80211_disconnect.
      */
-    if(( eConnectionState_Disconnecting == pHddStaCtx->conn_info.connState) &&
-        (( eCSR_ROAM_RESULT_ASSOCIATED == roamResult) ||
-        ( eCSR_ROAM_ASSOCIATION_FAILURE == roamStatus)) )
+    if(((eConnectionState_Disconnecting == pHddStaCtx->conn_info.connState) ||
+         (eConnectionState_NotConnected == pHddStaCtx->conn_info.connState)) &&
+        ((eCSR_ROAM_RESULT_ASSOCIATED == roamResult) ||
+        (eCSR_ROAM_ASSOCIATION_FAILURE == roamStatus)))
     {
         VOS_TRACE( VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_INFO,
                 FL(" Disconnect from HDD in progress "));
