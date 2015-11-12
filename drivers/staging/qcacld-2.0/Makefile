@@ -44,8 +44,6 @@ CONFIG_ATH_PERF_PWR_OFFLOAD := 1
 #Disable packet log
 CONFIG_REMOVE_PKT_LOG := 0
 
-CONFIG_BUS_AUTO_SUSPEND := 1
-
 #Enable 11AC TX
 ifeq ($(CONFIG_ROME_IF),pci)
 	CONFIG_ATH_11AC_TXCOMPACT := 1
@@ -154,9 +152,6 @@ CONFIG_QCA_SINGLE_BINARY_SUPPORT := 0
 
 #Enable collecting target RAM dump after kernel panic
 CONFIG_TARGET_RAMDUMP_AFTER_KERNEL_PANIC := 1
-
-#Flag to enable/disable secure firmware feature
-CONFIG_FEATURE_SECURE_FIRMWARE := 0
 
 #Flag to enable Stats Ext implementation
 CONFIG_FEATURE_STATS_EXT := 1
@@ -296,6 +291,10 @@ endif
 
 ifeq ($(CONFIG_QCOM_TDLS),y)
 HDD_OBJS +=	$(HDD_SRC_DIR)/wlan_hdd_tdls.o
+endif
+
+ifeq ($(CONFIG_WLAN_FEATURE_MEMDUMP),y)
+HDD_OBJS += $(HDD_SRC_DIR)/wlan_hdd_memdump.o
 endif
 
 ############ EPPING ############
@@ -480,7 +479,7 @@ SME_P2P_OBJS = $(SME_SRC_DIR)/p2p/p2p_Api.o
 
 SME_RRM_OBJS := $(SME_SRC_DIR)/rrm/sme_rrm.o
 
-ifeq ($(CONFIG_FEATURE_NAN),y)
+ifeq ($(CONFIG_WLAN_FEATURE_NAN),y)
 SME_NAN_OBJS = $(SME_SRC_DIR)/nan/nan_Api.o
 endif
 
@@ -840,7 +839,6 @@ CDEFINES :=	-DANI_LITTLE_BYTE_ENDIAN \
 		-DFEATURE_WLAN_RA_FILTERING\
 	        -DWLAN_KD_READY_NOTIFIER \
 		-DWLAN_NL80211_TESTMODE \
-		-DFEATURE_WLAN_BATCH_SCAN \
 		-DFEATURE_WLAN_LPHB \
 		-DFEATURE_WLAN_PAL_TIMER_DISABLE \
 		-DFEATURE_WLAN_PAL_MEM_DISABLE \
@@ -967,7 +965,9 @@ CDEFINES += -DCONFIG_ATH_PCIE_MAX_PERF=0 -DCONFIG_ATH_PCIE_AWAKE_WHILE_DRIVER_LO
 CDEFINES += -DQCA_TX_HTT2_SUPPORT
 endif
 
+ifneq ($(TARGET_BUILD_VARIANT),user)
 CDEFINES += -DDEBUG_RX_RING_BUFFER
+endif
 
 # enable the MAC Address auto-generation feature
 CDEFINES += -DWLAN_AUTOGEN_MACADDR_FEATURE
@@ -1000,7 +1000,7 @@ ifeq ($(CONFIG_FEATURE_STATS_EXT), 1)
 CDEFINES += -DWLAN_FEATURE_STATS_EXT
 endif
 
-ifeq ($(CONFIG_FEATURE_NAN),y)
+ifeq ($(CONFIG_WLAN_FEATURE_NAN),y)
 CDEFINES += -DWLAN_FEATURE_NAN
 endif
 
@@ -1139,8 +1139,10 @@ ifeq ($(CONFIG_SMP),y)
 CDEFINES += -DQCA_CONFIG_SMP
 endif
 
-#Enable Channel Matrix restriction for all targets
-CDEFINES += -DWLAN_ENABLE_CHNL_MATRIX_RESTRICTION
+#rps feature
+ifeq ($(CONFIG_RPS),y)
+CDEFINES += -DQCA_FEATURE_RPS
+endif
 
 #features specific to mdm9630
 ifeq ($(CONFIG_ARCH_MDM9630), y)
@@ -1196,7 +1198,7 @@ CDEFINES += -DTARGET_RAMDUMP_AFTER_KERNEL_PANIC
 endif
 
 #Enable/disable secure firmware feature
-ifeq ($(CONFIG_FEATURE_SECURE_FIRMWARE), 1)
+ifeq ($(CONFIG_CNSS_SECURE_FW), y)
 CDEFINES += -DFEATURE_SECURE_FIRMWARE
 endif
 
@@ -1215,7 +1217,7 @@ CDEFINES += -DFEATURE_WLAN_D0WOW
 endif
 
 # Flag to enable bus auto suspend
-ifeq ($(CONFIG_BUS_AUTO_SUSPEND), 1)
+ifeq ($(CONFIG_BUS_AUTO_SUSPEND), y)
 CDEFINES += -DFEATURE_RUNTIME_PM
 endif
 # Some kernel include files are being moved.  Check to see if
@@ -1232,6 +1234,14 @@ endif
 # Enable feature support fo Linux version QCMBR
 ifeq ($(CONFIG_LINUX_QCMBR),y)
 CDEFINES += -DLINUX_QCMBR
+endif
+
+ifeq ($(CONFIG_WLAN_FEATURE_MEMDUMP),y)
+CDEFINES += -DWLAN_FEATURE_MEMDUMP
+endif
+
+ifeq ($(CONFIG_WLAN_OFFLOAD_PACKETS),y)
+CDEFINES += -DWLAN_FEATURE_OFFLOAD_PACKETS
 endif
 
 KBUILD_CPPFLAGS += $(CDEFINES)

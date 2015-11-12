@@ -1145,11 +1145,37 @@ static eHalStatus limSendHalStartScanOffloadReq(tpAniSirGlobal pMac,
     tANI_U8 *p;
     tANI_U8 *ht_cap_ie;
     tSirMsgQ msg;
-    tANI_U16 i, len, ht_cap_len = 0;
-    tSirRetStatus rc = eSIR_SUCCESS;
+    tANI_U16 i, len;
+    tANI_U16  ht_cap_len = 0, addn_ie_len = 0;
+#ifdef WLAN_FEATURE_11AC
+    tANI_U8 *vht_cap_ie;
+    tANI_U16 vht_cap_len = 0;
+#endif /* WLAN_FEATURE_11AC */
+    tSirRetStatus status, rc = eSIR_SUCCESS;
+    tDot11fIEExtCap extracted_extcap = {0};
+    bool extcap_present = true;
 
     pMac->lim.fOffloadScanPending = 0;
     pMac->lim.fOffloadScanP2PSearch = 0;
+
+    if (pScanReq->uIEFieldLen) {
+        status = lim_strip_extcap_update_struct(pMac,
+                     (uint8_t *) pScanReq + pScanReq->uIEFieldOffset,
+                     &pScanReq->uIEFieldLen, &extracted_extcap);
+
+        if (eSIR_SUCCESS != status) {
+            extcap_present = false;
+            limLog(pMac, LOG1, FL("Unable to Strip ExtCap IE from Scan Req"));
+        }
+
+        if (extcap_present) {
+            limLog(pMac, LOG1, FL("Extcap was part of SCAN IE - Updating FW"));
+            lim_send_ext_cap_ie(pMac, pScanReq->sessionId,
+                                &extracted_extcap, true);
+        }
+    } else {
+        limLog(pMac, LOG1, FL("No IEs in the scan request from supplicant"));
+    }
 
     /* The tSirScanOffloadReq will reserve the space for first channel,
        so allocate the memory for (numChannels - 1) and uIEFieldLen */
@@ -1161,7 +1187,21 @@ static eHalStatus limSendHalStartScanOffloadReq(tpAniSirGlobal pMac,
                FL("Adding HT Caps IE since dot11mode=%d"), pScanReq->dot11mode);
         ht_cap_len = 2 + sizeof(tHtCaps); /* 2 bytes for EID and Length */
         len += ht_cap_len;
+        addn_ie_len += ht_cap_len;
     }
+
+#ifdef WLAN_FEATURE_11AC
+    if (IS_DOT11_MODE_VHT(pScanReq->dot11mode)) {
+        limLog(pMac, LOG1,
+               FL("Adding VHT Caps IE since dot11mode=%d"),
+               pScanReq->dot11mode);
+        /* 2 bytes for EID and Length */
+        vht_cap_len = 2 + sizeof(tSirMacVHTCapabilityInfo) +
+                          sizeof(tSirVhtMcsInfo);
+        len += vht_cap_len;
+        addn_ie_len += vht_cap_len;
+    }
+#endif /* WLAN_FEATURE_11AC */
 
     pScanOffloadReq = vos_mem_malloc(len);
     if ( NULL == pScanOffloadReq )
@@ -1227,7 +1267,7 @@ static eHalStatus limSendHalStartScanOffloadReq(tpAniSirGlobal pMac,
         p[i] = pScanReq->channelList.channelNumber[i];
 
     pScanOffloadReq->uIEFieldLen = pScanReq->uIEFieldLen;
-    pScanOffloadReq->uIEFieldOffset = len - ht_cap_len -
+    pScanOffloadReq->uIEFieldOffset = len - addn_ie_len -
                                       pScanOffloadReq->uIEFieldLen;
     vos_mem_copy(
             (tANI_U8 *) pScanOffloadReq + pScanOffloadReq->uIEFieldOffset,
@@ -1243,9 +1283,24 @@ static eHalStatus limSendHalStartScanOffloadReq(tpAniSirGlobal pMac,
         vos_mem_set(ht_cap_ie, ht_cap_len, 0);
         *ht_cap_ie = SIR_MAC_HT_CAPABILITIES_EID;
         *(ht_cap_ie + 1) =  ht_cap_len - 2;
-        lim_set_ht_caps(pMac, NULL, ht_cap_ie, len - ht_cap_len);
+        lim_set_ht_caps(pMac, NULL, ht_cap_ie, ht_cap_len);
         pScanOffloadReq->uIEFieldLen += ht_cap_len;
     }
+
+#ifdef WLAN_FEATURE_11AC
+    /* Copy VHT Capability info if dot11mode is VHT Capable */
+    if (IS_DOT11_MODE_VHT(pScanReq->dot11mode)) {
+        /* Populate EID and Length field here */
+        vht_cap_ie = (tANI_U8 *) pScanOffloadReq +
+                                 pScanOffloadReq->uIEFieldOffset +
+                                 pScanOffloadReq->uIEFieldLen;
+        vos_mem_set(vht_cap_ie, vht_cap_len, 0);
+        *vht_cap_ie = SIR_MAC_VHT_CAPABILITIES_EID;
+        *(vht_cap_ie + 1) =  vht_cap_len - 2;
+        lim_set_vht_caps(pMac, NULL, vht_cap_ie, vht_cap_len);
+        pScanOffloadReq->uIEFieldLen += vht_cap_len;
+    }
+#endif /* WLAN_FEATURE_11AC */
 
     rc = wdaPostCtrlMsg(pMac, &msg);
     if (rc != eSIR_SUCCESS)
@@ -1292,9 +1347,10 @@ __limProcessSmeScanReq(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
     tpSirSmeScanReq     pScanReq;
     tANI_U8             i = 0;
 
-#ifdef FEATURE_WLAN_DIAG_SUPPORT_LIM //FEATURE_WLAN_DIAG_SUPPORT
-    limDiagEventReport(pMac, WLAN_PE_DIAG_SCAN_REQ_EVENT, NULL, 0, 0);
-#endif //FEATURE_WLAN_DIAG_SUPPORT
+#ifdef FEATURE_WLAN_DIAG_SUPPORT
+    limDiagEventReport(pMac, WLAN_PE_DIAG_SCAN_REQ_EVENT, NULL,
+                       eSIR_SUCCESS, eSIR_SUCCESS);
+#endif
 
     pScanReq = (tpSirSmeScanReq) pMsgBuf;
     limLog(pMac, LOG1, FL("SME SCAN REQ numChan %d min %d max %d IELen %d first %d fresh %d unique %d type %d mode %d rsp %d"),
@@ -2362,9 +2418,10 @@ __limProcessSmeReassocReq(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
 	return;
     }
 
-#ifdef FEATURE_WLAN_DIAG_SUPPORT_LIM //FEATURE_WLAN_DIAG_SUPPORT
-    limDiagEventReport(pMac, WLAN_PE_DIAG_REASSOC_REQ_EVENT, psessionEntry, 0, 0);
-#endif //FEATURE_WLAN_DIAG_SUPPORT
+#ifdef FEATURE_WLAN_DIAG_SUPPORT
+    limDiagEventReport(pMac, WLAN_PE_DIAG_REASSOC_REQ_EVENT, psessionEntry,
+                       eSIR_SUCCESS, eSIR_SUCCESS);
+#endif
     //pMac->lim.gpLimReassocReq = pReassocReq;//TO SUPPORT BT-AMP
 
     /* Store the reassoc handle in the session Table.. 23rd sep review */
@@ -2956,6 +3013,20 @@ __limProcessSmeDisassocCnf(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
                "does not have context, addr= "MAC_ADDRESS_STR),
                      MAC_ADDR_ARRAY(smeDisassocCnf.peerMacAddr));)
             return;
+        }
+
+        /*
+         * If MlM state is either of del_sta or del_bss state, then no need to
+         * go ahead and clean up further as there must be some cleanup in
+         * progress from upper layer disassoc/deauth request.
+         */
+        if((pStaDs->mlmStaContext.mlmState == eLIM_MLM_WT_DEL_STA_RSP_STATE) ||
+           (pStaDs->mlmStaContext.mlmState == eLIM_MLM_WT_DEL_BSS_RSP_STATE)) {
+            limLog(pMac, LOGE, FL("No need to cleanup for addr:"MAC_ADDRESS_STR
+                   "as Mlm state is %d"),
+                   MAC_ADDR_ARRAY(smeDisassocCnf.peerMacAddr),
+                   pStaDs->mlmStaContext.mlmState);
+           return;
         }
 
 #if defined WLAN_FEATURE_VOWIFI_11R
@@ -5693,35 +5764,27 @@ limProcessSmeReqMessages(tpAniSirGlobal pMac, tpSirMsgQ pMsg)
 
         case eWNI_SME_REASSOC_REQ:
             __limProcessSmeReassocReq(pMac, pMsgBuf);
-
             break;
 
         case eWNI_SME_DISASSOC_REQ:
             __limProcessSmeDisassocReq(pMac, pMsgBuf);
-
             break;
 
         case eWNI_SME_DISASSOC_CNF:
         case eWNI_SME_DEAUTH_CNF:
             __limProcessSmeDisassocCnf(pMac, pMsgBuf);
-
             break;
 
         case eWNI_SME_DEAUTH_REQ:
             __limProcessSmeDeauthReq(pMac, pMsgBuf);
-
             break;
-
-
 
         case eWNI_SME_SETCONTEXT_REQ:
             __limProcessSmeSetContextReq(pMac, pMsgBuf);
-
             break;
 
         case eWNI_SME_REMOVEKEY_REQ:
             __limProcessSmeRemoveKeyReq(pMac, pMsgBuf);
-
             break;
 
         case eWNI_SME_STOP_BSS_REQ:

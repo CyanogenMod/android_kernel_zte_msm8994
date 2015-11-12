@@ -580,6 +580,16 @@ typedef enum {
     WMITLV_TAG_STRUC_wmi_wow_enable_icmpv6_na_flt_cmd_fixed_param,
     WMITLV_TAG_STRUC_wmi_diag_event_log_config_fixed_param,
     WMITLV_TAG_STRUC_wmi_diag_event_log_supported_event_fixed_params,
+    WMITLV_TAG_STRUC_wmi_packet_filter_config_fixed_param,
+    WMITLV_TAG_STRUC_wmi_packet_filter_enable_fixed_param,
+    WMITLV_TAG_STRUC_wmi_sap_set_blacklist_param_cmd_fixed_param,
+    WMITLV_TAG_STRUC_wmi_mgmt_tx_send_cmd_fixed_param,
+    WMITLV_TAG_STRUC_wmi_mgmt_tx_compl_event_fixed_param,
+    WMITLV_TAG_STRUC_wmi_soc_set_antenna_mode_cmd_fixed_param,
+    WMITLV_TAG_STRUC_WMI_WOW_UDP_SVC_OFLD_CMD_fixed_param,
+    WMITLV_TAG_STRUC_wmi_lro_info_cmd_fixed_param,
+    WMITLV_TAG_STRUC_wmi_roam_earlystop_rssi_thres_param,
+    WMITLV_TAG_STRUC_wmi_service_ready_ext_event_fixed_param,
 } WMITLV_TAG_ID;
 
 /*
@@ -811,6 +821,7 @@ typedef enum {
  */
 #define WMITLV_ALL_EVT_LIST(OP) \
     OP(WMI_SERVICE_READY_EVENTID) \
+    OP(WMI_SERVICE_READY_EXT_EVENTID) \
     OP(WMI_READY_EVENTID) \
     OP(WMI_SCAN_EVENTID) \
     OP(WMI_PDEV_TPC_CONFIG_EVENTID) \
@@ -2277,6 +2288,11 @@ WMITLV_CREATE_PARAM_STRUC(WMI_SOC_SET_DUAL_MAC_CONFIG_CMDID);
     WMITLV_ELEM(id,op,buf,len, WMITLV_TAG_ARRAY_UINT32, A_UINT32, wlan_dbs_hw_mode_list, WMITLV_SIZE_VAR)
 WMITLV_CREATE_PARAM_STRUC(WMI_SERVICE_READY_EVENTID);
 
+/* Service Ready Extension event */
+#define WMITLV_TABLE_WMI_SERVICE_READY_EXT_EVENTID(id,op,buf,len) \
+    WMITLV_ELEM(id,op,buf,len, WMITLV_TAG_STRUC_wmi_service_ready_ext_event_fixed_param, wmi_service_ready_ext_event_fixed_param, fixed_param, WMITLV_SIZE_FIX)
+WMITLV_CREATE_PARAM_STRUC(WMI_SERVICE_READY_EXT_EVENTID);
+
 /* Ready event */
 #define WMITLV_TABLE_WMI_READY_EVENTID(id,op,buf,len)                                                                                                 \
     WMITLV_ELEM(id,op,buf,len, WMITLV_TAG_STRUC_wmi_ready_event_fixed_param, wmi_ready_event_fixed_param, fixed_param, WMITLV_SIZE_FIX)
@@ -2454,7 +2470,7 @@ WMITLV_CREATE_PARAM_STRUC(WMI_ROAM_SYNCH_EVENTID);
 WMITLV_CREATE_PARAM_STRUC(WMI_WOW_WAKEUP_HOST_EVENTID);
 
 #define WMITLV_TABLE_WMI_WOW_INITIAL_WAKEUP_EVENTID(id,op,buf,len) \
-    WMITLV_ELEM(id,op,buf,len, WMITLV_TAG_STRUC_WOW_EVENT_INITIAL_WAKEUP_fixed_param, WOW_INITIAL_WAKEUP_EVENT_fixed_param, fixed_param, WMITLV_SIZE_FIX)
+    WMITLV_ELEM(id,op,buf,len, WMITLV_TAG_STRUC_WOW_EVENT_INITIAL_WAKEUP_fixed_param, WOW_INITIAL_WAKEUP_EVENT_fixed_param, fixed_param, WMITLV_SIZE_FIX) 
 WMITLV_CREATE_PARAM_STRUC(WMI_WOW_INITIAL_WAKEUP_EVENTID);
 
 /* RTT error report Event */

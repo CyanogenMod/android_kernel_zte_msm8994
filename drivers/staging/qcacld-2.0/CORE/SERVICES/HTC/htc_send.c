@@ -304,13 +304,21 @@ static A_STATUS HTCSendBundledNetbuf(HTC_TARGET *target,
             data_len,
             data_len / pEndpoint->TxCreditSize);
 #endif
+
+#if defined(DEBUG_HL_LOGGING) && defined(CONFIG_HL_SUPPORT)
+    if ((data_len / pEndpoint->TxCreditSize) < HTC_MAX_MSG_PER_BUNDLE_TX) {
+        target->tx_bundle_stats[data_len / pEndpoint->TxCreditSize]++;
+    }
+#endif
+
     status = HIFSend_head(target->hif_dev,
                pEndpoint->UL_PipeID,
                pEndpoint->Id,
                data_len,
                bundleBuf);
     if (status != A_OK){
-        adf_os_print("%s:HIFSend_head failed(len=%d).\n", __FUNCTION__, data_len);
+        adf_os_print("%s:HIFSend_head failed(len=%zu).\n", __FUNCTION__,
+                data_len);
     }
     return status;
 }

@@ -575,6 +575,7 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 	rx_pkt->pkt_meta.mpdu_hdr_ptr = adf_nbuf_data(wbuf);
 	rx_pkt->pkt_meta.mpdu_data_ptr = rx_pkt->pkt_meta.mpdu_hdr_ptr +
 					  rx_pkt->pkt_meta.mpdu_hdr_len;
+	rx_pkt->pkt_meta.tsf_delta = hdr->tsf_delta;
 	rx_pkt->pkt_buf = wbuf;
 
 #ifdef BIG_ENDIAN_HOST
@@ -602,9 +603,9 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 #endif
 
 	TLSHIM_LOGD(
-		"%s: BSSID: "MAC_ADDRESS_STR" snr = %d, rssi = %d, rssi_raw = %d",
+		"%s: BSSID: "MAC_ADDRESS_STR" snr: %d, hdr_rssi: %d rssi: %d, rssi_raw: %d",
 			__func__, MAC_ADDR_ARRAY(wh->i_addr3),
-			hdr->snr, rx_pkt->pkt_meta.rssi,
+			hdr->snr, hdr->rssi, rx_pkt->pkt_meta.rssi,
 			rx_pkt->pkt_meta.rssi_raw);
 
 	if (!tl_shim->mgmt_rx) {
@@ -770,6 +771,16 @@ static int tlshim_mgmt_rx_wmi_handler(void *context, u_int8_t *data,
 	if (vos_is_logp_in_progress(VOS_MODULE_ID_TL, NULL)) {
 			TLSHIM_LOGE("%s: LOPG in progress\n", __func__);
 			return (-1);
+	}
+
+	if (vos_is_load_unload_in_progress(VOS_MODULE_ID_TL, NULL)) {
+			TLSHIM_LOGE("%s: load/unload in progress\n", __func__);
+			return (-1);
+	}
+
+	if (!tl_shim) {
+		TLSHIM_LOGE("%s: tl shim ctx is NULL\n", __func__);
+		return (-1);
 	}
 
 	adf_os_spin_lock_bh(&tl_shim->mgmt_lock);
@@ -1131,7 +1142,6 @@ adf_nbuf_t WLANTL_SendSTA_DataFrame(void *vos_ctx, u_int8_t sta_id,
 	adf_nbuf_t ret;
 	struct ol_txrx_peer_t *peer;
 
-	ENTER();
 	if (!tl_shim) {
 		TLSHIM_LOGE("tl_shim is NULL");
 		return skb;
@@ -1959,6 +1969,9 @@ VOS_STATUS WLANTL_Open(void *vos_ctx, WLANTL_ConfigInfoType *tl_cfg)
 	tl_shim->ip_checksum_offload = tl_cfg->ip_checksum_offload;
 	tl_shim->delay_interval = tl_cfg->uDelayedTriggerFrmInt;
 	tl_shim->enable_rxthread = tl_cfg->enable_rxthread;
+	if (tl_shim->enable_rxthread)
+		TLSHIM_LOGE("TL Shim RX thread enabled");
+
 	return status;
 }
 
