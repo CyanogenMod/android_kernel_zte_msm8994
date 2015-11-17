@@ -200,7 +200,8 @@ typedef struct ieee80211com
     u_int8_t vdev_id;
     u_int8_t last_radar_found_chan;
     int32_t dfs_pri_multiplier;
-    vos_lock_t chan_lock;
+    adf_os_spinlock_t chan_lock;
+    bool disable_phy_err_processing;
 } IEEE80211COM, *PIEEE80211COM;
 
 /*

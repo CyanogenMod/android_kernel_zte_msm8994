@@ -1023,6 +1023,7 @@ static int wma_vdev_start_resp_handler(void *handle, u_int8_t *cmd_param_info,
 	wmi_vdev_start_response_event_fixed_param *resp_event;
 	u_int8_t *buf;
 	vos_msg_t vos_msg = {0};
+	tp_wma_handle wma = (tp_wma_handle) handle;
 
 	WMA_LOGI("%s: Enter", __func__);
 	param_buf = (WMI_VDEV_START_RESP_EVENTID_param_tlvs *) cmd_param_info;
@@ -1037,6 +1038,13 @@ static int wma_vdev_start_resp_handler(void *handle, u_int8_t *cmd_param_info,
 		WMA_LOGE("%s: Failed alloc memory for buf", __func__);
 		return -EINVAL;
 	}
+
+	if (wma_is_vdev_in_ap_mode(wma, resp_event->vdev_id)) {
+		adf_os_spin_lock_bh(&wma->dfs_ic->chan_lock);
+		wma->dfs_ic->disable_phy_err_processing = false;
+		adf_os_spin_unlock_bh(&wma->dfs_ic->chan_lock);
+	}
+
 	vos_mem_zero(buf, sizeof(wmi_vdev_start_response_event_fixed_param));
 	vos_mem_copy(buf, (u_int8_t *)resp_event,
 					sizeof(wmi_vdev_start_response_event_fixed_param));
@@ -5333,16 +5341,24 @@ static int wma_unified_dfs_radar_rx_event_handler(void *handle,
 
 	radar_event = param_tlvs->fixed_param;
 
-	vos_lock_acquire(&ic->chan_lock);
+	adf_os_spin_lock_bh(&ic->chan_lock);
 	chan = ic->ic_curchan;
-	if (NV_CHANNEL_DFS != vos_nv_getChannelEnabledState(chan->ic_ieee)) {
-		WMA_LOGE("%s: Invalid DFS Phyerror event. Channel=%d is Non-DFS",
-			 __func__, chan->ic_ieee);
-		vos_lock_release(&ic->chan_lock);
+
+	if (ic->disable_phy_err_processing) {
+		WMA_LOGD("%s: radar indication done,drop phyerror event",
+				__func__);
+		adf_os_spin_unlock_bh(&ic->chan_lock);
 		return 0;
 	}
 
-	vos_lock_release(&ic->chan_lock);
+	if (NV_CHANNEL_DFS != vos_nv_getChannelEnabledState(chan->ic_ieee)) {
+		WMA_LOGE("%s: Invalid DFS Phyerror event. Channel=%d is Non-DFS",
+			 __func__, chan->ic_ieee);
+		adf_os_spin_unlock_bh(&ic->chan_lock);
+		return 0;
+	}
+
+	adf_os_spin_unlock_bh(&ic->chan_lock);
 	dfs->ath_dfs_stats.total_phy_errors++;
 
 	if (dfs->dfs_caps.ath_chip_is_bb_tlv) {
@@ -10663,17 +10679,14 @@ static VOS_STATUS wma_vdev_start(tp_wma_handle wma,
 				return VOS_STATUS_E_FAILURE;
 			}
 
-			vos_lock_acquire(&wma->dfs_ic->chan_lock);
-			if (wma->dfs_ic->ic_curchan)
-			{
-				OS_FREE(wma->dfs_ic->ic_curchan);
-				wma->dfs_ic->ic_curchan = NULL;
-			}
 
+			adf_os_spin_lock_bh(&wma->dfs_ic->chan_lock);
+			if (isRestart)
+				wma->dfs_ic->disable_phy_err_processing = true;
 			/* provide the current channel to DFS */
 			wma->dfs_ic->ic_curchan =
 				wma_dfs_configure_channel(wma->dfs_ic,chan,chanmode,req);
-			vos_lock_release(&wma->dfs_ic->chan_lock);
+			adf_os_spin_unlock_bh(&wma->dfs_ic->chan_lock);
 
 			wma_unified_dfs_phyerr_filter_offload_enable(wma);
 			dfs->disable_dfs_ch_switch =
@@ -19475,6 +19488,13 @@ static void wma_update_free_wow_ptrn_id(tp_wma_handle wma)
 		}
 	}
 
+	/*
+	 * Clear the wakeup pattern mask to ensure, we configure the
+	 * wakeup patterns properly to FW.
+	 */
+
+	wma->wow_wakeup_enable_mask = 0;
+	wma->wow_wakeup_disable_mask = 0;
 	WMA_LOGD("Total free wow pattern id for default patterns: %d",
 		 wma->wow.total_free_ptrn_id );
 }
@@ -19573,6 +19593,9 @@ pdev_resume:
 	wma_set_wow_bus_suspend(wma, 0);
 	/* unpause the vdev if left paused and hif_pci_suspend fails */
 	wma_unpause_vdev(wma);
+
+	if (runtime_pm)
+		vos_runtime_pm_allow_suspend();
 
 	return ret;
 }
@@ -19901,6 +19924,7 @@ static VOS_STATUS wma_suspend_req(tp_wma_handle wma, tpSirWlanSuspendParam info)
 
 	if (info == NULL) {
 		WMA_LOGD("runtime PM: Request to suspend all interfaces");
+		wmi_set_runtime_pm_inprogress(wma->wmi_handle, TRUE);
 		goto suspend_all_iface;
 	}
 
@@ -20058,7 +20082,6 @@ send_ready_to_suspend:
 	wma_set_wow_bus_suspend(wma, 1);
 
 	wma_send_status_to_suspend_ind(wma, TRUE, info == NULL);
-
 
 	return VOS_STATUS_SUCCESS;
 }
@@ -24396,79 +24419,6 @@ static VOS_STATUS wma_process_fw_mem_dump_req(tp_wma_handle wma,
 }
 #endif /* WLAN_FEATURE_MEMDUMP */
 
-/*
- * wma_process_set_ie_info() - Function to send IE info to firmware
- * @wma:                Pointer to WMA handle
- * @ie_data:       Pointer for ie data
- *
- * This function sends IE information to firmware
- *
- * Return: VOS_STATUS_SUCCESS for success otherwise failure
- *
- */
-static VOS_STATUS wma_process_set_ie_info(tp_wma_handle wma,
-					  struct vdev_ie_info* ie_info)
-{
-	wmi_vdev_set_ie_cmd_fixed_param *cmd;
-	wmi_buf_t buf;
-	uint8_t *buf_ptr;
-	uint32_t len, ie_len_aligned;
-	int ret;
-
-	if (!ie_info || !wma) {
-		WMA_LOGE(FL("input pointer is NULL"));
-		return VOS_STATUS_E_FAILURE;
-	}
-
-	/* Validate the input */
-	if (ie_info->length  <= 0) {
-		WMA_LOGE(FL("Invalid IE length"));
-		return -EINVAL;
-	}
-
-	ie_len_aligned = roundup(ie_info->length, sizeof(uint32_t));
-	/* Allocate memory for the WMI command */
-	len = sizeof(*cmd) + WMI_TLV_HDR_SIZE + ie_len_aligned;
-
-	buf = wmi_buf_alloc(wma->wmi_handle, len);
-	if (!buf) {
-		WMA_LOGE(FL("wmi_buf_alloc failed"));
-		return VOS_STATUS_E_NOMEM;
-	}
-
-	buf_ptr = wmi_buf_data(buf);
-	vos_mem_zero(buf_ptr, len);
-
-	/* Populate the WMI command */
-	cmd = (wmi_vdev_set_ie_cmd_fixed_param *)buf_ptr;
-
-	WMITLV_SET_HDR(&cmd->tlv_header,
-		       WMITLV_TAG_STRUC_wmi_vdev_set_ie_cmd_fixed_param,
-		       WMITLV_GET_STRUCT_TLVLEN(
-			wmi_vdev_set_ie_cmd_fixed_param));
-	cmd->vdev_id = ie_info->vdev_id;
-	cmd->ie_id = ie_info->ie_id;
-	cmd->ie_len = ie_info->length;
-
-	WMA_LOGE(FL("IE:%d of size:%d sent for vdev:%d"), ie_info->ie_id,
-		 ie_info->length, ie_info->vdev_id);
-
-	buf_ptr += sizeof(*cmd);
-	WMITLV_SET_HDR(buf_ptr, WMITLV_TAG_ARRAY_BYTE, ie_len_aligned);
-	buf_ptr += WMI_TLV_HDR_SIZE;
-
-	vos_mem_copy(buf_ptr, ie_info->data, cmd->ie_len);
-
-	ret = wmi_unified_cmd_send(wma->wmi_handle, buf, len,
-				   WMI_VDEV_SET_IE_CMDID);
-	if (ret != EOK) {
-		WMA_LOGE(FL("Failed to send set IE command ret = %d"), ret);
-		wmi_buf_free(buf);
-	}
-
-	return ret;
-}
-
 /**
  * wma_enable_specific_fw_logs() - Start/Stop logging of diag event/log id
  * @wma_handle: WMA handle
@@ -25372,11 +25322,6 @@ VOS_STATUS wma_mc_process_msg(v_VOID_t *vos_context, vos_msg_t *msg)
 		case SIR_HAL_FLUSH_LOG_TO_FW:
 			wma_send_flush_logs_to_fw(wma_handle);
 			/* Body ptr is NULL here */
-			break;
-		case WDA_SET_IE_INFO:
-			wma_process_set_ie_info(wma_handle,
-					(struct vdev_ie_info *) msg->bodyptr);
-			vos_mem_free(msg->bodyptr);
 			break;
 		case WDA_SET_RSSI_MONITOR_REQ:
 			wma_set_rssi_monitoring(wma_handle,
@@ -26761,7 +26706,7 @@ static void wma_dfs_detach(struct ieee80211com *dfs_ic)
 {
 	dfs_detach(dfs_ic);
 
-        vos_lock_destroy(&dfs_ic->chan_lock);
+        adf_os_spinlock_destroy(&dfs_ic->chan_lock);
 	if (NULL != dfs_ic->ic_curchan) {
 		OS_FREE(dfs_ic->ic_curchan);
 		dfs_ic->ic_curchan = NULL;
@@ -29341,7 +29286,7 @@ struct ieee80211com* wma_dfs_attach(struct ieee80211com *dfs_ic)
      * and shared DFS code
      */
     dfs_ic->ic_dfs_notify_radar = ieee80211_mark_dfs;
-    vos_lock_init(&dfs_ic->chan_lock);
+    adf_os_spinlock_init(&dfs_ic->chan_lock);
     /* Initializes DFS Data Structures and queues*/
     dfs_attach(dfs_ic);
 
@@ -29444,16 +29389,19 @@ wma_dfs_configure_channel(struct ieee80211com *dfs_ic,
         WMA_LOGE("%s: DFS ic is Invalid",__func__);
         return NULL;
     }
-    dfs_ic->ic_curchan = (struct ieee80211_channel *) OS_MALLOC(NULL,
+
+
+    if (!dfs_ic->ic_curchan) {
+        dfs_ic->ic_curchan = (struct ieee80211_channel *) OS_MALLOC(NULL,
                                         sizeof(struct ieee80211_channel),
                                         GFP_ATOMIC);
-    if (dfs_ic->ic_curchan == NULL)
-    {
-        WMA_LOGE("%s: allocation of dfs_ic->ic_curchan failed %zu",
-                                     __func__,
-                                     sizeof(struct ieee80211_channel));
-        return NULL;
+        if (dfs_ic->ic_curchan == NULL) {
+            WMA_LOGE("%s: allocation of dfs_ic->ic_curchan failed %zu",
+                     __func__, sizeof(struct ieee80211_channel));
+            return NULL;
+        }
     }
+
     OS_MEMZERO(dfs_ic->ic_curchan, sizeof (struct ieee80211_channel));
 
     dfs_ic->ic_curchan->ic_ieee = req->chan;
@@ -29631,6 +29579,11 @@ int wma_dfs_indicate_radar(struct ieee80211com *ic,
 	 * But, when DFS test mode is enabled, allow multiple dfs
 	 * radar events to be posted on the same channel.
 	 */
+
+	adf_os_spin_lock_bh(&ic->chan_lock);
+	if (!pmac->sap.SapDfsInfo.disable_dfs_ch_switch)
+		wma->dfs_ic->disable_phy_err_processing = true;
+
 	if ((ichan->ic_ieee  != (wma->dfs_ic->last_radar_found_chan)) ||
 	    ( pmac->sap.SapDfsInfo.disable_dfs_ch_switch == VOS_TRUE) )
 	{
@@ -29654,6 +29607,7 @@ int wma_dfs_indicate_radar(struct ieee80211com *ic,
 		WMA_LOGE("%s:DFS- WDA_DFS_RADAR_IND Message Posted",__func__);
 	}
 
+	adf_os_spin_unlock_bh(&ic->chan_lock);
 	return 0;
 }
 
@@ -30026,7 +29980,6 @@ int wma_runtime_suspend_req(WMA_HANDLE handle)
 	int ret = 0;
 	tp_wma_handle wma = (tp_wma_handle) handle;
 
-	wmi_set_runtime_pm_inprogress(wma->wmi_handle, TRUE);
 	vos_event_reset(&wma->runtime_suspend);
 
 	vosMessage.bodyptr = NULL;
@@ -30035,7 +29988,7 @@ int wma_runtime_suspend_req(WMA_HANDLE handle)
 
 	if (!VOS_IS_STATUS_SUCCESS(vosStatus)) {
 		ret = -EAGAIN;
-		goto out;
+		return ret;
 	}
 
 	if (vos_wait_single_event(&wma->runtime_suspend,
@@ -30043,7 +29996,6 @@ int wma_runtime_suspend_req(WMA_HANDLE handle)
 			VOS_STATUS_SUCCESS) {
 		WMA_LOGE("Failed to get runtime suspend event");
 		ret = -EAGAIN;
-		wma_runtime_resume_req(wma);
 		goto out;
 	}
 
@@ -30055,7 +30007,8 @@ int wma_runtime_suspend_req(WMA_HANDLE handle)
 	}
 out:
 	if (ret)
-		wmi_set_runtime_pm_inprogress(wma->wmi_handle, FALSE);
+		wma_runtime_resume_req(wma);
+
 	return ret;
 }
 
@@ -30065,6 +30018,8 @@ int wma_runtime_resume_req(WMA_HANDLE handle)
 	VOS_STATUS vosStatus = VOS_STATUS_SUCCESS;
 	int ret = 0;
 
+	vos_runtime_pm_prevent_suspend();
+
 	vosMessage.bodyptr = NULL;
 	vosMessage.type    = WDA_RUNTIME_PM_RESUME_IND;
 	vosStatus = vos_mq_post_message(VOS_MQ_ID_WDA, &vosMessage );
@@ -30072,8 +30027,29 @@ int wma_runtime_resume_req(WMA_HANDLE handle)
 	if (!VOS_IS_STATUS_SUCCESS(vosStatus)) {
 		WMA_LOGE("Failed to post Runtime PM Resume IND to VOS");
 		ret = -EAGAIN;
+		vos_runtime_pm_allow_suspend();
 	}
 
 	return ret;
 }
 #endif
+
+/**
+ * wma_get_vht_ch_width - return vht channel width
+ *
+ * Return: return vht channel width
+ */
+uint32_t wma_get_vht_ch_width(void)
+{
+	uint32_t fw_ch_wd = WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ;
+	v_CONTEXT_t v_ctx =  vos_get_global_context(VOS_MODULE_ID_VOSS, NULL);
+	tp_wma_handle wm_hdl = (tp_wma_handle)vos_get_context(VOS_MODULE_ID_WDA,
+							      v_ctx);
+
+	if (wm_hdl->vht_cap_info & IEEE80211_VHTCAP_SUP_CHAN_WIDTH_160)
+		fw_ch_wd = WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ;
+	else if (wm_hdl->vht_cap_info & IEEE80211_VHTCAP_SUP_CHAN_WIDTH_80_160)
+		fw_ch_wd = WNI_CFG_VHT_CHANNEL_WIDTH_80_PLUS_80MHZ;
+
+	return fw_ch_wd;
+}

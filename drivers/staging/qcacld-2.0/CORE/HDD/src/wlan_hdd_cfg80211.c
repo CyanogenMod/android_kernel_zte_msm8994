@@ -1287,7 +1287,8 @@ __wlan_hdd_cfg80211_get_supported_features(struct wiphy *wiphy,
     fset |= WIFI_FEATURE_HOTSPOT;
 
 #ifdef FEATURE_WLAN_EXTSCAN
-    if (sme_IsFeatureSupportedByFW(EXTENDED_SCAN)) {
+    if (pHddCtx->cfg_ini->extscan_enabled &&
+        sme_IsFeatureSupportedByFW(EXTENDED_SCAN)) {
         hddLog(LOG1, FL("EXTScan is supported by firmware"));
         fset |= WIFI_FEATURE_EXTSCAN | WIFI_FEATURE_HAL_EPNO;
     }
@@ -2209,6 +2210,10 @@ static int __wlan_hdd_cfg80211_extscan_get_capabilities(struct wiphy *wiphy,
         return -EINVAL;
     }
 
+    if (!pHddCtx->cfg_ini->extscan_enabled) {
+        hddLog(LOGE, FL("extscan not supported"));
+        return -ENOTSUPP;
+    }
     if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
                     data, data_len,
                     wlan_hdd_extscan_config_policy)) {
@@ -2342,6 +2347,10 @@ static int __wlan_hdd_cfg80211_extscan_get_cached_results(struct wiphy *wiphy,
 		return -EINVAL;
 	}
 
+	if (!pHddCtx->cfg_ini->extscan_enabled) {
+		hddLog(LOGE, FL("extscan not supported"));
+		return -ENOTSUPP;
+	}
 	if (nla_parse(tb, PARAM_MAX, data, data_len,
 			wlan_hdd_extscan_config_policy)) {
 		hddLog(LOGE, FL("Invalid ATTR"));
@@ -3078,6 +3087,10 @@ static int __wlan_hdd_cfg80211_extscan_get_valid_channels(struct wiphy *wiphy,
        return -EINVAL;
     }
 
+    if (!pHddCtx->cfg_ini->extscan_enabled) {
+        hddLog(LOGE, FL("extscan not supported"));
+        return -ENOTSUPP;
+    }
     if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
                   data, data_len,
                   wlan_hdd_extscan_config_policy)) {
@@ -3740,6 +3753,11 @@ static int __wlan_hdd_cfg80211_extscan_start(struct wiphy *wiphy,
 		return -EINVAL;
 	}
 
+	if (!pHddCtx->cfg_ini->extscan_enabled) {
+		hddLog(LOGE, FL("extscan not supported"));
+		return -ENOTSUPP;
+	}
+
 	if (nla_parse(tb, PARAM_MAX, data, data_len,
 		wlan_hdd_extscan_config_policy)) {
 		hddLog(LOGE, FL("Invalid ATTR"));
@@ -3943,6 +3961,10 @@ static int __wlan_hdd_cfg80211_extscan_stop(struct wiphy *wiphy,
 		return -EINVAL;
 	}
 
+	if (!pHddCtx->cfg_ini->extscan_enabled) {
+		hddLog(LOGE, FL("extscan not supported"));
+		return -ENOTSUPP;
+	}
 	if (nla_parse(tb, PARAM_MAX, data, data_len,
 			wlan_hdd_extscan_config_policy)) {
 		hddLog(LOGE, FL("Invalid ATTR"));
@@ -4055,6 +4077,10 @@ static int __wlan_hdd_cfg80211_extscan_reset_bssid_hotlist(struct wiphy *wiphy,
         return -EINVAL;
     }
 
+    if (!pHddCtx->cfg_ini->extscan_enabled) {
+        hddLog(LOGE, FL("extscan not supported"));
+        return -ENOTSUPP;
+    }
     if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
                     data, data_len,
                     wlan_hdd_extscan_config_policy)) {
@@ -4180,7 +4206,10 @@ __wlan_hdd_cfg80211_extscan_reset_ssid_hotlist(struct wiphy *wiphy,
 		hddLog(LOGE, FL("HDD context is not valid"));
 		return -EINVAL;
 	}
-
+	if (!hdd_ctx->cfg_ini->extscan_enabled) {
+		hddLog(LOGE, FL("extscan not supported"));
+		return -ENOTSUPP;
+	}
 	if (nla_parse(tb, PARAM_MAX,
 		      data, data_len,
 		      wlan_hdd_extscan_config_policy)) {
@@ -4303,6 +4332,10 @@ static int __wlan_hdd_cfg80211_extscan_reset_significant_change(
     }
 
 
+    if (!pHddCtx->cfg_ini->extscan_enabled) {
+        hddLog(LOGE, FL("extscan not supported"));
+        return -ENOTSUPP;
+    }
     if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
                     data, data_len,
                     wlan_hdd_extscan_config_policy)) {
@@ -10376,6 +10409,11 @@ static int wlan_hdd_cfg80211_start_bss(hdd_adapter_t *pHostapdAdapter,
                  ("%s: ERROR: HDD vos wait for single_event failed!!"),
                  __func__);
         smeGetCommandQStatus(hHal);
+#ifdef WLAN_FEATURE_MBSSID
+        WLANSAP_StopBss(WLAN_HDD_GET_SAP_CTX_PTR(pHostapdAdapter));
+#else
+        WLANSAP_StopBss(pHddCtx->pvosContext);
+#endif
         VOS_ASSERT(0);
         return -EINVAL;
     }
@@ -14849,7 +14887,8 @@ static int __wlan_hdd_cfg80211_connect( struct wiphy *wiphy,
     if (req->channel) {
         status = wlan_hdd_cfg80211_connect_start(pAdapter, req->ssid,
                                                   req->ssid_len, req->bssid,
-                          #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,15,0))
+                          #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,15,0)) || \
+                                           defined(CFG80211_BSSID_HINT_BACKPORT)
                                                   req->bssid_hint,
                           #else
                                                   NULL,
@@ -14858,7 +14897,8 @@ static int __wlan_hdd_cfg80211_connect( struct wiphy *wiphy,
     } else {
         status = wlan_hdd_cfg80211_connect_start(pAdapter, req->ssid,
                                                   req->ssid_len, req->bssid,
-                          #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,15,0))
+                          #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,15,0)) || \
+                                           defined(CFG80211_BSSID_HINT_BACKPORT)
                                                   req->bssid_hint,
                           #else
                                                   NULL,

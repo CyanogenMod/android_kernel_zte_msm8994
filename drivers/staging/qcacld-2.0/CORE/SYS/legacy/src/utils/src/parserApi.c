@@ -850,20 +850,30 @@ PopulateDot11fVHTCaps(tpAniSirGlobal           pMac,
 
         pDot11f->ldpcCodingCap = (nCfgValue & 0x0001);
 
-        nCfgValue = 0;
-        if (psessionEntry->htConfig.ht_sgi)
-            CFG_GET_INT( nStatus, pMac, WNI_CFG_VHT_SHORT_GI_80MHZ,
-                         nCfgValue );
+        if (psessionEntry->vhtTxChannelWidthSet <
+                        WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ) {
+            pDot11f->shortGI80MHz = 0;
+        } else {
+            nCfgValue = 0;
+            if (psessionEntry->htConfig.ht_sgi)
+                CFG_GET_INT( nStatus, pMac, WNI_CFG_VHT_SHORT_GI_80MHZ,
+                             nCfgValue );
 
-        pDot11f->shortGI80MHz= (nCfgValue & 0x0001);
+            pDot11f->shortGI80MHz= (nCfgValue & 0x0001);
+        }
 
-        nCfgValue = 0;
-        if (psessionEntry->htConfig.ht_sgi)
-            CFG_GET_INT( nStatus, pMac,
-                         WNI_CFG_VHT_SHORT_GI_160_AND_80_PLUS_80MHZ,
-                         nCfgValue );
+        if (psessionEntry->vhtTxChannelWidthSet <
+                        WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ) {
+            pDot11f->shortGI160and80plus80MHz = 0;
+        } else {
+            nCfgValue = 0;
+            if (psessionEntry->htConfig.ht_sgi)
+                CFG_GET_INT( nStatus, pMac,
+                             WNI_CFG_VHT_SHORT_GI_160_AND_80_PLUS_80MHZ,
+                             nCfgValue );
 
-        pDot11f->shortGI160and80plus80MHz = (nCfgValue & 0x0001);
+            pDot11f->shortGI160and80plus80MHz = (nCfgValue & 0x0001);
+        }
 
         nCfgValue = 0;
         if (psessionEntry->htConfig.ht_tx_stbc)
@@ -1073,18 +1083,18 @@ PopulateDot11fExtCap(tpAniSirGlobal   pMac,
 
     pDot11f->present = 1;
 
-    if (!psessionEntry) {
-        limLog(pMac, LOG1, FL("11MC support enabled for non-SAP cases"));
-        pDot11f->num_bytes = DOT11F_IE_EXTCAP_MAX_LEN;
-    } else if (psessionEntry->sap_dot11mc) {
-        limLog(pMac, LOG1, FL("11MC support enabled"));
+    if (psessionEntry->sap_dot11mc) {
+        PELOGE(limLog(pMac, LOG1,
+               FL("11MC support enabled"));)
         pDot11f->num_bytes = DOT11F_IE_EXTCAP_MAX_LEN;
     } else {
         if (eLIM_AP_ROLE != psessionEntry->limSystemRole) {
-            limLog(pMac, LOG1, FL("11MC support enabled"));
+            PELOGE(limLog(pMac, LOG1,
+                   FL("11MC support enabled"));)
             pDot11f->num_bytes = DOT11F_IE_EXTCAP_MAX_LEN;
         } else  {
-            limLog(pMac, LOG1, FL("11MC support disabled"));
+            PELOGE(limLog(pMac, LOG1,
+                   FL("11MC support disabled"));)
             pDot11f->num_bytes = DOT11F_IE_EXTCAP_MIN_LEN;
         }
     }
@@ -1105,7 +1115,7 @@ PopulateDot11fExtCap(tpAniSirGlobal   pMac,
 
     if (val)   // If set to true then set RTTv3
     {
-        if (!psessionEntry || LIM_IS_STA_ROLE(psessionEntry)) {
+        if (LIM_IS_STA_ROLE(psessionEntry)) {
             p_ext_cap->fine_time_meas_initiator =
               (pMac->fine_time_meas_cap & FINE_TIME_MEAS_STA_INITIATOR) ? 1 : 0;
             p_ext_cap->fine_time_meas_responder =

@@ -1329,6 +1329,42 @@ void vos_set_logp_in_progress(VOS_MODULE_ID moduleId, v_U8_t value)
    pHddCtx->isLogpInProgress = value;
 }
 
+/**
+ * vos_is_unload_in_progress() - check if driver unload is in
+ * progress
+ *
+ * @moduleContext: the input module context pointer
+ * @moduleId: the module ID who's context pointer is input in
+ *        moduleContext
+ *
+ * Return: true  - unload in progress
+ *         false - unload not in progress/error
+ */
+
+
+v_BOOL_t vos_is_unload_in_progress(VOS_MODULE_ID moduleId,
+				 v_VOID_t *moduleContext)
+{
+	hdd_context_t *hdd_ctx = NULL;
+
+	if (gpVosContext == NULL) {
+		VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_ERROR,
+		"%s: global voss context is NULL", __func__);
+		VOS_ASSERT(0);
+		return 0;
+	}
+	hdd_ctx = (hdd_context_t *)vos_get_context(VOS_MODULE_ID_HDD,
+						   gpVosContext);
+	if (NULL == hdd_ctx) {
+		VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_ERROR,
+		"%s: hdd context is NULL", __func__);
+		VOS_ASSERT(0);
+		return 0;
+	}
+
+	return hdd_ctx->isUnloadInProgress;
+}
+
 v_U8_t vos_is_load_unload_in_progress(VOS_MODULE_ID moduleId, v_VOID_t *moduleContext)
 {
   if (gpVosContext == NULL)
@@ -2511,6 +2547,8 @@ void vos_trigger_recovery(void)
 		return;
 	}
 
+	vos_runtime_pm_prevent_suspend();
+
 	wma_crash_inject(wma_handle, RECOVERY_SIM_SELF_RECOVERY, 0);
 
 	status = vos_wait_single_event(&wma_handle->recovery_event,
@@ -2523,14 +2561,15 @@ void vos_trigger_recovery(void)
 		if (vos_is_logp_in_progress(VOS_MODULE_ID_VOSS, NULL)) {
 			VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_ERROR,
 				"LOGP is in progress, ignore!");
-			return;
+			goto out;
 		}
 		vos_set_logp_in_progress(VOS_MODULE_ID_VOSS, TRUE);
 		cnss_schedule_recovery_work();
 #endif
-
-		return;
 	}
+
+out:
+	vos_runtime_pm_allow_suspend();
 }
 
 v_U64_t vos_get_monotonic_boottime(void)
