@@ -43,6 +43,11 @@ menuconfig USB_GADGET
 	   the kernel DocBook documentation for this API.
 
 if USB_GADGET
+config ZTEMT_USB_CONFIGURATION
+       string "ztemt usb configruation"
+       default y
+       help
+         just for configuation ztemt usb
 
 config USB_GADGET_DEBUG
 	boolean "Debugging messages (DEVELOPMENT)"

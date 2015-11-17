@@ -458,6 +458,11 @@ struct mdss_panel_info {
 	bool is_prim_panel;
 
 	char panel_name[MDSS_MAX_PANEL_LEN];
+
+	/*dimming*/
+	bool disable_dimming_when_suspend;
+	bool disable_dimming_when_resume;
+
 	struct mdss_mdp_pp_tear_check te;
 
 	struct lcd_panel_info lcdc;

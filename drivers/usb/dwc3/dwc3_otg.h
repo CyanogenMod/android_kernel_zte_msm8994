@@ -22,9 +22,14 @@
 #include <linux/usb/otg.h>
 #include "power.h"
 
+#ifdef CONFIG_ZTEMT_MSM8994_CHARGER
 #define DWC3_IDEV_CHG_MAX 1500
 #define DWC3_HVDCP_CHG_MAX 1800
-
+#define DWC3_IDEV_CHG_FLOATING_MAX 900
+#else
+#define DWC3_IDEV_CHG_MAX 1500
+#define DWC3_HVDCP_CHG_MAX 1800
+#endif
 /*
  * Module param to override current drawn for DCP charger
  * Declared in dwc3-msm module
@@ -58,7 +63,12 @@ struct dwc3_otg {
 	int			charger_retry_count;
 	int			vbus_retry_count;
 };
+#ifdef CONFIG_SII8620_MHL_TX
+struct dwc3_mhl{
+	struct regulator	*vbus_mhl;
+};
 
+#endif
 /**
  * USB charger types
  *
