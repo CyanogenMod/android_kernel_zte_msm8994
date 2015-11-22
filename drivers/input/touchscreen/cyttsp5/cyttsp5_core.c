@@ -5320,7 +5320,7 @@ static ssize_t cyttsp5_easy_wakeup_gesture_show(struct device *dev,
 	ssize_t ret;
 
 	mutex_lock(&cd->system_lock);
-	ret = snprintf(buf, CY_MAX_PRBUF_SIZE, "0x%02X\n",
+	ret = snprintf(buf, CY_MAX_PRBUF_SIZE, "%d\n",
 			cd->easy_wakeup_gesture);
 	mutex_unlock(&cd->system_lock);
 	return ret;
