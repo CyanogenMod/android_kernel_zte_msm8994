@@ -77,10 +77,10 @@
 /** Private **/
 #define WMA_CFG_NV_DNLD_TIMEOUT            500
 #define WMA_READY_EVENTID_TIMEOUT          2000
-#define WMA_TGT_SUSPEND_COMPLETE_TIMEOUT   3000
+#define WMA_TGT_SUSPEND_COMPLETE_TIMEOUT   6000
 #define WMA_WAKE_LOCK_TIMEOUT              1000
-#define WMA_MAX_RESUME_RETRY               1000
-#define WMA_RESUME_TIMEOUT                 3000
+#define WMA_MAX_RESUME_RETRY               100
+#define WMA_RESUME_TIMEOUT                 6000
 #define WMA_TGT_WOW_TX_COMPLETE_TIMEOUT    2000
 #define MAX_MEM_CHUNKS                     32
 #define WMA_CRASH_INJECT_TIMEOUT           5000
@@ -157,6 +157,21 @@
 #define WMA_SEC_TO_USEC                     (1000000)
 
 #define BEACON_TX_BUFFER_SIZE               (512)
+
+/* WMA_ETHER_TYPE_OFFSET = sa(6) + da(6) */
+#define WMA_ETHER_TYPE_OFFSET (6 + 6)
+/* WMA_ICMP_V6_HEADER_OFFSET = sa(6) + da(6) + eth_type(2) + icmp_v6_hdr(6)*/
+#define WMA_ICMP_V6_HEADER_OFFSET (6 + 6 + 2 + 6)
+/* WMA_ICMP_V6_TYPE_OFFSET = sa(6) + da(6) + eth_type(2) + 40 */
+#define WMA_ICMP_V6_TYPE_OFFSET (6 + 6 + 2 + 40)
+
+#define WMA_ICMP_V6_HEADER_TYPE (0x3A)
+#define WMA_ICMP_V6_RA_TYPE (0x86)
+#define WMA_ICMP_V6_NS_TYPE (0x87)
+#define WMA_ICMP_V6_NA_TYPE (0x88)
+#define WMA_BCAST_MAC_ADDR (0xFF)
+#define WMA_MCAST_IPV4_MAC_ADDR (0x01)
+#define WMA_MCAST_IPV6_MAC_ADDR (0x33)
 
 typedef struct probeTime_dwellTime {
 	u_int8_t dwell_time;
@@ -679,6 +694,8 @@ typedef struct {
 	v_BOOL_t ptrn_match_enable_all_vdev;
 	void* pGetRssiReq;
 	v_S7_t first_rssi;
+	bool get_sta_rssi;
+	v_MACADDR_t peer_macaddr;
 	t_thermal_mgmt thermal_mgmt_info;
         v_BOOL_t  roam_offload_enabled;
         t_wma_roam_preauth_chan_state_t roam_preauth_scan_state;
@@ -744,6 +761,23 @@ typedef struct {
 #ifdef FEATURE_WLAN_D0WOW
 	atomic_t in_d0wow;
 #endif
+	uint32_t wow_pno_match_wake_up_count;
+	uint32_t wow_pno_complete_wake_up_count;
+	uint32_t wow_gscan_wake_up_count;
+	uint32_t wow_low_rssi_wake_up_count;
+	uint32_t wow_rssi_breach_wake_up_count;
+	uint32_t wow_ucast_wake_up_count;
+	uint32_t wow_bcast_wake_up_count;
+	uint32_t wow_ipv4_mcast_wake_up_count;
+	uint32_t wow_ipv6_mcast_wake_up_count;
+	uint32_t wow_ipv6_mcast_ra_stats;
+	uint32_t wow_ipv6_mcast_ns_stats;
+	uint32_t wow_ipv6_mcast_na_stats;
+
+	bool  tx_chain_mask_cck;
+	uint16_t self_gen_frm_pwr;
+	uint32_t wow_wakeup_enable_mask;
+	uint32_t wow_wakeup_disable_mask;
 }t_wma_handle, *tp_wma_handle;
 
 struct wma_target_cap {
@@ -1095,7 +1129,9 @@ extern v_BOOL_t sys_validateStaConfig(void *pImage, unsigned long cbFile,
                                void **ppStaConfig, v_SIZE_t *pcbStaConfig);
 extern void vos_WDAComplete_cback(v_PVOID_t pVosContext);
 extern void wma_send_regdomain_info(u_int32_t reg_dmn, u_int16_t regdmn2G,
-		u_int16_t regdmn5G, int8_t ctl2G, int8_t ctl5G);
+				    u_int16_t regdmn5G, int8_t ctl2G,
+				    int8_t ctl5G);
+
 void wma_get_modeselect(tp_wma_handle wma, u_int32_t *modeSelect);
 
 
@@ -1116,7 +1152,7 @@ VOS_STATUS wma_update_vdev_tbl(tp_wma_handle wma_handle, u_int8_t vdev_id,
 
 int32_t regdmn_get_regdmn_for_country(u_int8_t *alpha2);
 void regdmn_get_ctl_info(struct regulatory *reg, u_int32_t modesAvail,
-     u_int32_t modeSelect);
+			 u_int32_t modeSelect);
 
 /*get the ctl from regdomain*/
 u_int8_t regdmn_get_ctl_for_regdmn(u_int32_t reg_dmn);
@@ -1269,15 +1305,12 @@ VOS_STATUS wma_send_snr_request(tp_wma_handle wma_handle, void *pGetRssiReq,
 #define WMA_PNO_MATCH_WAKE_LOCK_TIMEOUT		(5 * 1000) /* in msec */
 #define WMA_PNO_SCAN_COMPLETE_WAKE_LOCK_TIMEOUT	(2 * 1000) /* in msec */
 #endif
-#define WMA_AUTH_REQ_RECV_WAKE_LOCK_TIMEOUT	(50 * 1000) /* in msec */
-#define WMA_ASSOC_REQ_RECV_WAKE_LOCK_DURATION	(30 * 1000) /* in msec */
-#define WMA_DEAUTH_RECV_WAKE_LOCK_DURATION	(30 * 1000) /* in msec */
-#define WMA_DISASSOC_RECV_WAKE_LOCK_DURATION	(30 * 1000) /* in msec */
+#define WMA_AUTH_REQ_RECV_WAKE_LOCK_TIMEOUT	(5 * 1000) /* in msec */
+#define WMA_ASSOC_REQ_RECV_WAKE_LOCK_DURATION	(5 * 1000) /* in msec */
+#define WMA_DEAUTH_RECV_WAKE_LOCK_DURATION	(5 * 1000) /* in msec */
+#define WMA_DISASSOC_RECV_WAKE_LOCK_DURATION	(5 * 1000) /* in msec */
 #ifdef FEATURE_WLAN_AUTO_SHUTDOWN
-#define WMA_AUTO_SHUTDOWN_WAKE_LOCK_DURATION    (30 * 1000) /* in msec */
-#endif
-#ifdef FEATURE_WLAN_RA_FILTERING
-#define WMA_RA_MATCH_RECV_WAKE_LOCK_DURATION    (5 * 1000) /* in msec */
+#define WMA_AUTO_SHUTDOWN_WAKE_LOCK_DURATION    (5 * 1000) /* in msec */
 #endif
 
 /* U-APSD maximum service period of peer station */

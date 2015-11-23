@@ -74,7 +74,7 @@ typedef enum {
     GEN_PARAM_DUMP_WATCHDOG,
     GEN_PARAM_CRASH_INJECT,
 #ifdef CONFIG_ATH_PCIE_ACCESS_DEBUG
-    GEN_PARAM_DUMP_PCIE_ACCESS_LOG
+    GEN_PARAM_DUMP_PCIE_ACCESS_LOG,
 #endif
 } GEN_PARAM;
 
@@ -97,6 +97,8 @@ VOS_STATUS wma_stop(v_VOID_t *vos_context, tANI_U8 reason);
 VOS_STATUS wma_close(v_VOID_t *vos_context);
 
 VOS_STATUS wma_wmi_service_close(v_VOID_t *vos_context);
+
+VOS_STATUS wma_wmi_work_close(v_VOID_t *vos_context);
 
 v_VOID_t wma_rx_ready_event(WMA_HANDLE handle, v_VOID_t *ev);
 

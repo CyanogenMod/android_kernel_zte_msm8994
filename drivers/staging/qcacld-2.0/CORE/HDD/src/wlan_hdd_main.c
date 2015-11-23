@@ -9122,13 +9122,6 @@ hdd_adapter_t* hdd_open_adapter( hdd_context_t *pHddCtx, tANI_U8 session_type,
          //netif_tx_disable(pWlanDev);
          netif_carrier_off(pAdapter->dev);
 
-         if (WLAN_HDD_P2P_CLIENT == session_type ||
-                 WLAN_HDD_P2P_DEVICE == session_type) {
-             /* Initialize the work queue to defer the
-              * back to back RoC request */
-             INIT_DELAYED_WORK(&pAdapter->roc_work, hdd_p2p_roc_work_queue);
-         }
-
 #ifdef QCA_LL_TX_FLOW_CT
          /* SAT mode default TX Flow control instance
           * This instance will be used for
@@ -9180,11 +9173,6 @@ hdd_adapter_t* hdd_open_adapter( hdd_context_t *pHddCtx, tANI_U8 session_type,
          netif_carrier_off(pAdapter->dev);
 
          hdd_set_conparam( 1 );
-         if (WLAN_HDD_P2P_GO == session_type) {
-             /* Initialize the work queue to
-              * defer the back to back RoC request */
-             INIT_DELAYED_WORK(&pAdapter->roc_work, hdd_p2p_roc_work_queue);
-         }
 
          break;
       }
@@ -9622,11 +9610,6 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
 
    ENTER();
 
-   if (pHddCtx->isLogpInProgress) {
-       hddLog(LOG1, FL("LOGP in Progress. Ignore!!!"));
-       return VOS_STATUS_E_FAILURE;
-   }
-
    netif_tx_disable(pAdapter->dev);
    netif_carrier_off(pAdapter->dev);
    switch(pAdapter->device_mode)
@@ -9674,9 +9657,6 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
          }
          if (pAdapter->device_mode != WLAN_HDD_INFRA_STATION) {
              wlan_hdd_cleanup_remain_on_channel_ctx(pAdapter);
-#ifdef WLAN_OPEN_SOURCE
-             cancel_delayed_work_sync(&pAdapter->roc_work);
-#endif
          }
 
 #ifdef WLAN_OPEN_SOURCE
@@ -9728,9 +9708,6 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
          //Any softap specific cleanup here...
          if (pAdapter->device_mode == WLAN_HDD_P2P_GO) {
              wlan_hdd_cleanup_remain_on_channel_ctx(pAdapter);
-#ifdef WLAN_OPEN_SOURCE
-             cancel_delayed_work_sync(&pAdapter->roc_work);
-#endif
          }
 
 #ifdef QCA_LL_TX_FLOW_CT
@@ -9960,7 +9937,10 @@ VOS_STATUS hdd_start_all_adapters( hdd_context_t *pHddCtx )
 
             //Indicate disconnect event to supplicant if associated previously
             if (eConnectionState_Associated == connState ||
-                eConnectionState_IbssConnected == connState )
+                eConnectionState_IbssConnected == connState ||
+                eConnectionState_NotConnected == connState ||
+                eConnectionState_IbssDisconnected == connState ||
+                eConnectionState_Disconnecting == connState)
             {
                union iwreq_data wrqu;
                memset(&wrqu, '\0', sizeof(wrqu));
@@ -10643,6 +10623,17 @@ static void hdd_set_multicast_list(struct net_device *dev)
    int mc_count;
    int i = 0;
    struct netdev_hw_addr *ha;
+   hdd_context_t *pHddCtx;
+
+   pHddCtx = WLAN_HDD_GET_CTX(pAdapter);
+   if (0 != wlan_hdd_validate_context(pHddCtx))
+      return;
+
+   if (VOS_FTM_MODE == hdd_get_conparam())
+      return;
+
+   /* Delete already configured multicast address list */
+   wlan_hdd_set_mc_addr_list(pAdapter, false);
 
    if (dev->flags & IFF_ALLMULTI)
    {
@@ -10676,6 +10667,10 @@ static void hdd_set_multicast_list(struct net_device *dev)
          i++;
       }
    }
+
+   /* Configure the updated multicast address list */
+   wlan_hdd_set_mc_addr_list(pAdapter, true);
+
    return;
 }
 #endif
@@ -11434,19 +11429,20 @@ VOS_STATUS hdd_post_voss_start_config(hdd_context_t* pHddCtx)
 }
 
 /* wake lock APIs for HDD */
-void hdd_prevent_suspend(void)
+void hdd_prevent_suspend(uint32_t reason)
 {
-    vos_wake_lock_acquire(&wlan_wake_lock);
+	vos_wake_lock_acquire(&wlan_wake_lock, reason);
 }
 
-void hdd_allow_suspend(void)
+void hdd_allow_suspend(uint32_t reason)
 {
-    vos_wake_lock_release(&wlan_wake_lock);
+	vos_wake_lock_release(&wlan_wake_lock, reason);
 }
 
-void hdd_prevent_suspend_timeout(v_U32_t timeout)
+void hdd_prevent_suspend_timeout(v_U32_t timeout, uint32_t reason)
 {
-    vos_wake_lock_timeout_acquire(&wlan_wake_lock, timeout);
+	vos_wake_lock_timeout_acquire(&wlan_wake_lock, timeout,
+                                      reason);
 }
 
 /**---------------------------------------------------------------------------
@@ -12122,6 +12118,15 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
       goto err_wiphy_unregister;
    }
 
+   ret = process_wma_set_command(0, WMI_PDEV_PARAM_TX_CHAIN_MASK_1SS,
+                                 pHddCtx->cfg_ini->tx_chain_mask_1ss,
+                                 PDEV_CMD);
+   if (0 != ret) {
+       hddLog(VOS_TRACE_LEVEL_ERROR,
+              "%s: WMI_PDEV_PARAM_TX_CHAIN_MASK_1SS failed %d",
+              __func__, ret);
+   }
+
    status = hdd_set_sme_chan_list(pHddCtx);
    if (status != VOS_STATUS_SUCCESS) {
       hddLog(VOS_TRACE_LEVEL_FATAL,
@@ -12618,9 +12623,9 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
    /* Initialize the RoC Request queue and work. */
    hdd_list_init((&pHddCtx->hdd_roc_req_q), MAX_ROC_REQ_QUEUE_ENTRY);
 #ifdef CONFIG_CNSS
-   cnss_init_work(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
+   cnss_init_delayed_work(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
 #else
-   INIT_WORK(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
+   INIT_DELAYED_WORK(&pHddCtx->rocReqWork, wlan_hdd_roc_request_dequeue);
 #endif
 
    /*
@@ -12792,7 +12797,7 @@ static int hdd_driver_init( void)
    ENTER();
 
    vos_wake_lock_init(&wlan_wake_lock, "wlan");
-   hdd_prevent_suspend();
+   hdd_prevent_suspend(WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT);
    /*
     * The Krait is going to Idle/Stand Alone Power Save
     * more aggressively which is resulting in the longer driver load time.
@@ -12814,7 +12819,7 @@ static int hdd_driver_init( void)
                           WLAN_MODULE_NAME);
          if (ret_status < 0) {
             hdd_remove_pm_qos();
-            hdd_allow_suspend();
+            hdd_allow_suspend(WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT);
             vos_wake_lock_destroy(&wlan_wake_lock);
          }
          return ret_status;
@@ -12825,7 +12830,7 @@ static int hdd_driver_init( void)
                          &wlan_wake_lock, WLAN_MODULE_NAME);
          if (ret_status < 0) {
             hdd_remove_pm_qos();
-            hdd_allow_suspend();
+            hdd_allow_suspend(WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT);
             vos_wake_lock_destroy(&wlan_wake_lock);
          }
          return ret_status;
@@ -12878,7 +12883,7 @@ static int hdd_driver_init( void)
    }
 
    hdd_remove_pm_qos();
-   hdd_allow_suspend();
+   hdd_allow_suspend(WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT);
 
    if (ret_status) {
        hddLog(VOS_TRACE_LEVEL_FATAL, "%s: WLAN Driver Initialization failed",

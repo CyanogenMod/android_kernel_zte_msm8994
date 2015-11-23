@@ -386,6 +386,7 @@ VOS_STATUS vos_open( v_CONTEXT_t *pVosContext, v_SIZE_t hddContextSize )
 #ifdef WLAN_FEATURE_LPSS
    scn->enablelpasssupport = pHddCtx->cfg_ini->enablelpasssupport;
 #endif
+   scn->enable_self_recovery = pHddCtx->cfg_ini->enableSelfRecovery;
 
    vos_fw_hash_check_config(scn, pHddCtx);
    vos_runtime_pm_config(scn, pHddCtx);
@@ -475,6 +476,9 @@ VOS_STATUS vos_open( v_CONTEXT_t *pVosContext, v_SIZE_t hddContextSize )
     macOpenParms.ucRxIndRingCount = pHddCtx->cfg_ini->IpaUcRxIndRingCount;
     macOpenParms.ucTxPartitionBase = pHddCtx->cfg_ini->IpaUcTxPartitionBase;
 #endif /* IPA_UC_OFFLOAD */
+
+    macOpenParms.tx_chain_mask_cck = pHddCtx->cfg_ini->tx_chain_mask_cck;
+    macOpenParms.self_gen_frm_pwr = pHddCtx->cfg_ini->self_gen_frm_pwr;
 
    vStatus = WDA_open( gpVosContext, gpVosContext->pHDDContext,
                        hdd_update_tgt_cfg,
@@ -987,6 +991,13 @@ VOS_STATUS vos_stop( v_CONTEXT_t vosContext )
 VOS_STATUS vos_close( v_CONTEXT_t vosContext )
 {
   VOS_STATUS vosStatus;
+
+  vosStatus = wma_wmi_work_close( vosContext );
+  if (!VOS_IS_STATUS_SUCCESS(vosStatus)) {
+     VOS_TRACE( VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_ERROR,
+         "%s: Failed to close wma_wmi_work", __func__);
+     VOS_ASSERT( VOS_IS_STATUS_SUCCESS( vosStatus ) );
+  }
 
 #ifdef WLAN_BTAMP_FEATURE
   vosStatus = WLANBAP_Close(vosContext);
@@ -2214,6 +2225,13 @@ VOS_STATUS vos_shutdown(v_CONTEXT_t vosContext)
                 "%s: Failed to close WDA!", __func__);
       VOS_ASSERT(VOS_IS_STATUS_SUCCESS(vosStatus));
     }
+  }
+
+  vosStatus = wma_wmi_work_close(vosContext);
+  if (!VOS_IS_STATUS_SUCCESS(vosStatus)) {
+     VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_ERROR,
+               "%s: Failed to close wma_wmi_work!", __func__);
+     VOS_ASSERT(VOS_IS_STATUS_SUCCESS(vosStatus));
   }
 
   if (gpVosContext->htc_ctx)
