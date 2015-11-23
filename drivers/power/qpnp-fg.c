@@ -37,22 +37,7 @@
 
 #ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
 static int debug_mask_fg = 1;
-static int  debug_mask_capacity = 0;
-module_param_named(
-	debug_mask_fg, debug_mask_fg, int, S_IRUSR | S_IWUSR
-);
-#define DBG_FG(x...) do {if (debug_mask_fg) pr_info(">>ZTEMT_FG>>  " x); } while (0)
-#endif
-
-#ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
-//打开调试接口
-//#undef pr_debug
-//#define pr_debug   pr_info
-#undef KERN_INFO
-#define KERN_INFO KERN_ERR
-#endif
-
-#ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
+static int debug_mask_capacity = 0;
 	#define	SUMSUNG_BTAAERY_ID_MAX	500000 
 	#define	SUMSUNG_BTAAERY_ID_MIN	400000 
 	#define	ATL_BTAAERY_ID_MAX	20000 
@@ -1182,12 +1167,6 @@ static int fg_configure_soc(struct fg_chip *chip)
 		if (fg_debug_mask & FG_POWER_SUPPLY)
 			pr_info("Configuring soc registers batt_soc: %x\n",
 				batt_soc);
-#ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
-		if(debug_mask_fg){
-			pr_info("charger:jing Configuring soc registers batt_soc: %x\n",
-					batt_soc);
-		}
-#endif
 		batt_soc = ESR_PULSE_RECONFIG_SOC;
 		rc = fg_mem_write(chip, (u8 *)&batt_soc, BATTERY_SOC_REG, 3,
 				BATTERY_SOC_OFFSET, 1);
@@ -1281,12 +1260,6 @@ static int get_prop_capacity(struct fg_chip *chip)
 	if (fg_debug_mask & FG_POWER_SUPPLY)
 		pr_info_ratelimited("capacity: %d, raw: 0x%02x\n",
 				capacity, cap[0]);
-#ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
-	if(debug_mask_fg & debug_mask_capacity){
-		pr_info("charger:jing capacity: %d, raw[0]: 0x%02x  raw[1]: 0x%02x\n",
-				capacity, cap[0], cap[1]);
-	}
-#endif
 	return capacity;
 }
 
@@ -1586,11 +1559,6 @@ static void update_sram_data(struct fg_chip *chip, int *resched_ms)
 
 		if (fg_debug_mask & FG_MEM_DEBUG_READS)
 			pr_info("%d %lld %d\n", i, temp, fg_data[i].value);
-#ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
-		if(debug_mask_fg&&(*resched_ms==10)){
-                       pr_info("charger :jing %d %lld %d\n", i, temp, fg_data[i].value);
-               }
-#endif
 	}
 	fg_mem_release(chip);
 
@@ -2756,13 +2724,7 @@ static void dump_sram(struct work_struct *work)
 	for (i = 0; i < SRAM_DUMP_LEN; i += 4) {
 		str[0] = '\0';
 		fill_string(str, DEBUG_PRINT_BUFFER_SIZE, buffer + i, 4);
-#ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
-		if(debug_mask_fg){
-			pr_info(" charger :jing %03X %s\n", SRAM_DUMP_START + i, str);
-		}
-#else
 		pr_info("%03X %s\n", SRAM_DUMP_START + i, str);
-#endif
 	}
 	devm_kfree(chip->dev, buffer);
 #ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
@@ -2902,12 +2864,6 @@ static irqreturn_t fg_batt_missing_irq_handler(int irq, void *_chip)
 	if (fg_debug_mask & FG_IRQS)
 		pr_info("batt-missing triggered: %s\n",
 				batt_missing ? "missing" : "present");
-#ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
-	if(debug_mask_fg){
-			pr_info("charger :jing batt-missing triggered: %s\n",
-				batt_missing ? "missing" : "present");
-	}
-#endif
 	if (chip->power_supply_registered)
 		power_supply_changed(&chip->bms_psy);
 	return IRQ_HANDLED;
@@ -3686,15 +3642,8 @@ wait:
 	if ((reg & PROFILE_INTEGRITY_BIT) && vbat_in_range
 			&& !fg_is_batt_empty(chip)
 			&& profiles_same) {
-#ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
-		if(debug_mask_fg){
-			pr_info(" charger :jing  Battery profiles same, using default\n");
-		}
-#else	
 		if (fg_debug_mask & FG_STATUS)
 			pr_info("Battery profiles same, using default\n");
-#endif
-		
 		if (fg_est_dump)
 			schedule_work(&chip->dump_sram);
 		goto done;
@@ -3705,12 +3654,6 @@ wait:
 		pr_info("Vbat out of range: v_current_pred: %d, v:%d\n",
 				fg_data[FG_DATA_CPRED_VOLTAGE].value,
 				fg_data[FG_DATA_VOLTAGE].value);
-
-#ifdef CONFIG_ZTEMT_MSM8994_FUEL_GAUGE
-	if(debug_mask_fg) {
-		pr_info("charger :jing Using new profile\n");
-	}	
-#else	
 	if ((fg_debug_mask & FG_STATUS) && fg_is_batt_empty(chip))
 		pr_info("battery empty\n");
 	if ((fg_debug_mask & FG_STATUS) && !profiles_same)
@@ -3721,8 +3664,6 @@ wait:
 				DUMP_PREFIX_NONE, 16, 1,
 				chip->batt_profile, len, false);
 	}
-#endif
-	
 	old_batt_type = chip->batt_type;
 	chip->batt_type = loading_batt_type;
 	if (chip->power_supply_registered)

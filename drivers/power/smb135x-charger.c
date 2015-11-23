@@ -29,21 +29,6 @@
 #include <linux/regulator/machine.h>
 #include <linux/pinctrl/consumer.h>
 
-#ifdef CONFIG_ZTEMT_MSM8994_CHARGER
-static int debug_mask_smb1357 = 0;
-module_param_named(debug_mask_smb1357, debug_mask_smb1357, int, S_IRUSR | S_IWUSR);
-#define DBG_SMB1357(x...)   do {if (debug_mask_smb1357) pr_info(">>ZTEMT_CHARGE>>  " x); } while (0)
-#endif
-
-#ifdef CONFIG_ZTEMT_MSM8994_CHARGER
-#define  DEBUG
-//打开调试接口
-//#undef pr_debug
-//#define pr_debug   pr_info
-#undef KERN_INFO
-#define KERN_INFO KERN_ERR
-#endif
-
 #define SMB135X_BITS_PER_REG	8
 
 /* Mask/Bit helpers */
