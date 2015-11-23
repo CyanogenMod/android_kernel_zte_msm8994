@@ -1020,8 +1020,7 @@ void hdd_tx_timeout(struct net_device *dev)
               pAdapter->isTxSuspended[2],
               pAdapter->isTxSuspended[3]);
 
-   for (i = 0; i < 8; i++)
-   {
+   for (i = 0; i < NUM_TX_QUEUES; i++) {
       txq = netdev_get_tx_queue(dev, i);
       VOS_TRACE( VOS_MODULE_ID_HDD_DATA, VOS_TRACE_LEVEL_INFO,
                 "Queue%d status: %d", i, netif_tx_queue_stopped(txq));
@@ -1801,8 +1800,9 @@ VOS_STATUS hdd_rx_packet_cbk(v_VOID_t *vosContext,
          rxstat = netif_rx(skb);
       } else {
 #ifdef WLAN_FEATURE_HOLD_RX_WAKELOCK
-         vos_wake_lock_timeout_acquire(&pHddCtx->rx_wake_lock,
-                                       HDD_WAKE_LOCK_DURATION);
+   vos_wake_lock_timeout_acquire(&pHddCtx->rx_wake_lock,
+                                 HDD_WAKE_LOCK_DURATION,
+                                 WIFI_POWER_EVENT_WAKELOCK_HOLD_RX);
 #endif
          /*
           * This is the last packet on the chain

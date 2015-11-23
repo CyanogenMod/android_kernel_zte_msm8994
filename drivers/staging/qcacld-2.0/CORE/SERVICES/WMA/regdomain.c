@@ -451,7 +451,7 @@ u_int32_t regdmn_getwmodesnreg(u_int32_t modesAvail,
 }
 
 void regdmn_get_ctl_info(struct regulatory *reg, u_int32_t modesAvail,
-     u_int32_t modeSelect)
+                         u_int32_t modeSelect)
 {
 	const REG_DOMAIN *regdomain2G = NULL;
 	const REG_DOMAIN *regdomain5G = NULL;
@@ -542,7 +542,7 @@ void regdmn_get_ctl_info(struct regulatory *reg, u_int32_t modesAvail,
 			ctl_5g = ctl;
 	}
 	wma_send_regdomain_info(reg->reg_domain, regpair->regDmn2GHz,
-			regpair->regDmn5GHz, ctl_2g, ctl_5g);
+				regpair->regDmn5GHz, ctl_2g, ctl_5g);
 }
 
 void regdmn_set_regval(struct regulatory *reg)

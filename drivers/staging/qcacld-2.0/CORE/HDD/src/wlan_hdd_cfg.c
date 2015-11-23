@@ -3928,6 +3928,13 @@ REG_TABLE_ENTRY g_registry_table[] =
                  CFG_IGNORE_PEER_ERP_INFO_MIN,
                  CFG_IGNORE_PEER_ERP_INFO_MAX ),
 
+   REG_VARIABLE(CFG_ENABLE_DEAUTH_BEFORE_CONNECTION, WLAN_PARAM_Integer,
+                hdd_config_t, sendDeauthBeforeCon,
+                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
+                CFG_ENABLE_DEAUTH_BEFORE_CONNECTION_DEFAULT,
+                CFG_ENABLE_DEAUTH_BEFORE_CONNECTION_MIN,
+                CFG_ENABLE_DEAUTH_BEFORE_CONNECTION_MAX),
+
    REG_VARIABLE( CFG_ENABLE_MAC_ADDR_SPOOFING, WLAN_PARAM_Integer,
                  hdd_config_t, enable_mac_spoofing,
                  VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
@@ -3953,6 +3960,27 @@ REG_TABLE_ENTRY g_registry_table[] =
                 CFG_DROPPED_PKT_DISCONNECT_TH_DEFAULT,
                 CFG_DROPPED_PKT_DISCONNECT_TH_MIN,
                 CFG_DROPPED_PKT_DISCONNECT_TH_MAX),
+
+   REG_VARIABLE(CFG_TX_CHAIN_MASK_CCK, WLAN_PARAM_Integer,
+                hdd_config_t, tx_chain_mask_cck,
+                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
+                CFG_TX_CHAIN_MASK_CCK_DEFAULT,
+                CFG_TX_CHAIN_MASK_CCK_MIN,
+                CFG_TX_CHAIN_MASK_CCK_MAX),
+
+   REG_VARIABLE(CFG_TX_CHAIN_MASK_1SS, WLAN_PARAM_Integer,
+                hdd_config_t, tx_chain_mask_1ss,
+                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
+                CFG_TX_CHAIN_MASK_1SS_DEFAULT,
+                CFG_TX_CHAIN_MASK_1SS_MIN,
+                CFG_TX_CHAIN_MASK_1SS_MAX),
+
+   REG_VARIABLE(CFG_SELF_GEN_FRM_PWR, WLAN_PARAM_Integer,
+                hdd_config_t, self_gen_frm_pwr,
+                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
+                CFG_SELF_GEN_FRM_PWR_DEFAULT,
+                CFG_SELF_GEN_FRM_PWR_MIN,
+                CFG_SELF_GEN_FRM_PWR_MAX),
 };
 
 #ifdef WLAN_FEATURE_MBSSID
@@ -6356,6 +6384,8 @@ VOS_STATUS hdd_set_sme_config( hdd_context_t *pHddCtx )
    smeConfig->csrConfig.pkt_err_disconn_th =
                    pHddCtx->cfg_ini->pkt_err_disconn_th;
    smeConfig->csrConfig.ignorePeerErpInfo = pConfig->ignorePeerErpInfo;
+
+   smeConfig->csrConfig.sendDeauthBeforeCon = pConfig->sendDeauthBeforeCon;
 
    halStatus = sme_UpdateConfig( pHddCtx->hHal, smeConfig);
    if ( !HAL_STATUS_SUCCESS( halStatus ) )
