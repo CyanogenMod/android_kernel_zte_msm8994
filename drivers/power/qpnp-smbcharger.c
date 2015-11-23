@@ -259,9 +259,6 @@ struct smbchg_chip {
 	bool				apsd_rerun;
 	bool				apsd_rerun_ignore_uv_irq;
 	struct completion		apsd_src_det_lowered;
-  #ifdef CONFIG_ZTEMT_POWER_DEBUG
-  struct delayed_work power_debug_work;
-  #endif
 #ifdef CONFIG_ZTEMT_MSM8994_CHARGER
 	struct delayed_work zte_eoc_work;
 	struct wake_lock		eoc_wake_lock;
@@ -291,15 +288,6 @@ enum wake_reason {
 	PM_ESR_PULSE = BIT(2),
 	PM_PARALLEL_TAPER = BIT(3),
 };
-#ifdef CONFIG_ZTEMT_POWER_DEBUG
-#include <../../arch/arm/mach-msm/clock.h>
-#define POWER_MONITOR_PERIOD_MS	10000
-#define DRV_NAME "zte_power_debug"
-static int power_debug_switch=1;
-static struct smbchg_chip *chip_temp;
-extern int msm_show_resume_irq_mask; //used to print the resume irq
-extern void global_print_active_locks( void );
-#endif
 
 #ifdef CONFIG_ZTEMT_MSM8994_CHARGER
 	static int get_prop_charger_voltage_now(struct smbchg_chip *chip);
@@ -5949,165 +5937,6 @@ static int create_debugfs_entries(struct smbchg_chip *chip)
 	}
 	return 0;
 }
-#ifdef CONFIG_ZTEMT_POWER_DEBUG
-
-static void print_battery_information(struct smbchg_chip *chip)
-{
-  #ifdef CONFIG_ZTEMT_BATTERY_MAX17050
-  return;
-  #endif
-   int ocv_uv ;
-  set_property_on_fg(chip, POWER_SUPPLY_PROP_UPDATE_NOW, 1);
-  
-  get_property_from_fg(chip, POWER_SUPPLY_PROP_VOLTAGE_OCV, &ocv_uv);
-  
-  printk("BMS capacity=%d current=%d vbat_uv=%d vbat_ocv_uv=%d batt_temp=%d	usb_in=%d chg_vol=%d pmic_temp=%d batt_pres=%d\n",\
-    get_prop_batt_capacity(chip),
-    get_prop_batt_current_now(chip),
-    get_prop_batt_voltage_now(chip),
-    ocv_uv,
-    get_prop_batt_temp(chip),
-    is_usb_present(chip),
-#ifdef CONFIG_ZTEMT_MSM8994_CHARGER	
-    get_prop_charger_voltage_now(chip)/1000,
-	get_prop_pmic_temp(chip)/1000,
-#else
-	0,
-	0,
-#endif	
-
-    get_prop_batt_present(chip));
-    //qpnp_chg_is_usb_chg_plugged_in(chip));
-
-}
-
-static void power_debug_work_func(struct work_struct *work)
-{
-	struct smbchg_chip *chip = container_of(work,
-	                                          struct smbchg_chip,
-	                                          power_debug_work.work);
-	printk("power_debug_work_func_______start!\n");
-	//print battery related information
-	print_battery_information(chip);
-	//print wakelocks
-	global_print_active_locks();
-	//wakelock_stats_show_debug();
-	schedule_delayed_work(&chip->power_debug_work,
-			  round_jiffies_relative(msecs_to_jiffies
-						(POWER_MONITOR_PERIOD_MS)));
-	printk("power_debug_work_func_________over!\n");
-
-}
-
-static int power_debug_work_control(int on)
-{
-	int ret;
-	struct smbchg_chip *chip = chip_temp; 
-	if(1==on)
-	{
-		if(1==power_debug_switch)
-		{
-			printk("%s:The power_debug_work is already on\n",__func__);
-			ret=1;
-		}
-		else
-		{
-			power_debug_switch=1;
-			msm_show_resume_irq_mask=1;
-			INIT_DELAYED_WORK(&chip->power_debug_work,  power_debug_work_func);
-			schedule_delayed_work(&chip->power_debug_work,
-			  round_jiffies_relative(msecs_to_jiffies
-						(POWER_MONITOR_PERIOD_MS)));
-			printk("%s:enable power_debug_work.\n",__func__);
-		}
-	}
-	else
-	{
-
-		if(0==power_debug_switch)
-		{
-			printk("%s:The power_debu_timer is already off\n",__func__);
-			ret=1;
-		}
-		else
-		{
-			power_debug_switch=0;
-			msm_show_resume_irq_mask=0;
-			cancel_delayed_work(&chip->power_debug_work);
-			printk("%s:disable power_debug_work.\n",__func__);
-		}
-
-	}
-	return ret;
-}
-
-
-static ssize_t po_info_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-
-	sprintf(buf, "%u\n", power_debug_switch);
-	return 1;
-}
-static ssize_t po_info_store(struct device *dev, 
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-
-	unsigned int val;
-
-	if (sscanf(buf, "%u", &val) == 1) {
-		if (power_debug_work_control(val))
-			return count;
-	}
-	return -EINVAL;
-}
-
-static ssize_t clock_dump_show(struct device *dev, 
-		struct device_attribute *attr, char *buf)
-{
-
-	sprintf(buf, "%u\n", power_debug_switch);
-	clock_debug_print_enabled();
-	return 1;
-}
-
-static DEVICE_ATTR(switch, 0644, po_info_show, po_info_store);
-static DEVICE_ATTR(clock_dump, 0644,  clock_dump_show, NULL);
-static struct kobject *po_kobject = NULL;
-
-static int power_debug_init(struct smbchg_chip *chip)
-{
-	int ret;
-	chip_temp = chip;
-	po_kobject = kobject_create_and_add(DRV_NAME, NULL);
-	if(po_kobject == NULL) {
-		ret = -ENOMEM;
-		goto err1;
-	}
-
-	ret = sysfs_create_file(po_kobject, &dev_attr_switch.attr);
-	ret |= sysfs_create_file(po_kobject, &dev_attr_clock_dump.attr);
-	if(ret){
-		goto err;
-	}
-
-	INIT_DELAYED_WORK(&chip->power_debug_work,  power_debug_work_func);
-
-	if(power_debug_switch) {
-	  msm_show_resume_irq_mask=1; //on in default, deleted is allow.
-	  schedule_delayed_work(&chip->power_debug_work,
-			  round_jiffies_relative(msecs_to_jiffies
-						(POWER_MONITOR_PERIOD_MS)));
-	}
-	return 0;
-
-err:
-	kobject_del(po_kobject);
-err1:
-	printk(DRV_NAME": Failed to create sys file\n");
-	return ret;
-}
-#endif
 
 #ifdef CONFIG_ZTEMT_MSM8994_CHARGER
 #define DEFAULT_PMIC_TEMP 	 0
@@ -6476,9 +6305,6 @@ static int smbchg_probe(struct spmi_device *spmi)
 	dev_info(chip->dev, "SMBCHG successfully probed batt=%d dc = %d usb = %d\n",
 			get_prop_batt_present(chip),
 			chip->dc_present, chip->usb_present);
-#ifdef CONFIG_ZTEMT_POWER_DEBUG
-        power_debug_init(chip);
-#endif
 #ifdef CONFIG_ZTEMT_MSM8994_CHARGER
         if((chip->dc_present|| chip->usb_present)&&(chip->batt_present )){
             smbchg_charging_en(chip, true);
