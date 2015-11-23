@@ -6309,7 +6309,7 @@ static void smbchg_check_the_usb_current(struct smbchg_chip *chip)
             }
             usb_curr_reg_val = reg&USBIN_INPUT_MASK;
             if (usb_curr_reg_val != USB_CURRENT_REG_VAL_500mA ) {
-                printk("jing smbchg_check_the_usb_current  reg:%d",reg);
+                printk("jing smbchg_check_the_usb_current  reg:%d\n",reg);
                 smbchg_set_usb_current_max(chip, CURRENT_500_MA);                
             }   
        }       
