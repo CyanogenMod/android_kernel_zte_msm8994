@@ -441,6 +441,8 @@ typedef struct sAniSirLim
 
     // Heart-Beat interval value
     tANI_U32   gLimHeartBeatCount;
+    tSirMacAddr gLimHeartBeatApMac[2];
+    tANI_U8 gLimHeartBeatApMacIndex;
 
     // Statistics to keep track of no. beacons rcvd in heart beat interval
     tANI_U16            gLimHeartBeatBeaconStats[MAX_NO_BEACONS_PER_HEART_BEAT_INTERVAL];
@@ -996,6 +998,8 @@ typedef struct sMacOpenParameters
     tANI_U32 ucTxPartitionBase;
 #endif /* IPA_UC_OFFLOAD */
 
+    bool      tx_chain_mask_cck;
+    uint16_t  self_gen_frm_pwr;
 } tMacOpenParameters;
 
 typedef struct sHalMacStartParameters
