@@ -1226,10 +1226,15 @@ typedef enum
 #define CFG_ROAM_RESCAN_RSSI_DIFF_MAX                   (100)
 #define CFG_ROAM_RESCAN_RSSI_DIFF_DEFAULT               (5)
 
+/*
+ * This parameter is the continuous packets dropping threshold that will trigger
+ * kickout peer event from fw.
+ * MIN value will disable the kickout feature.
+ */
 #define CFG_DROPPED_PKT_DISCONNECT_TH_NAME      "gDroppedPktDisconnectTh"
-#define CFG_DROPPED_PKT_DISCONNECT_TH_MIN       (48)
-#define CFG_DROPPED_PKT_DISCONNECT_TH_MAX       (256)
-#define CFG_DROPPED_PKT_DISCONNECT_TH_DEFAULT   (96)
+#define CFG_DROPPED_PKT_DISCONNECT_TH_MIN       (0)
+#define CFG_DROPPED_PKT_DISCONNECT_TH_MAX       (1024)
+#define CFG_DROPPED_PKT_DISCONNECT_TH_DEFAULT   (512)
 
 /*
  * This parameter is the RSSI diff above neighbor lookup threshold, when
@@ -2839,6 +2844,15 @@ This feature requires the dependent cfg.ini "gRoamPrefer5GHz" set to 1 */
 #define CFG_ENABLE_DEAUTH_TO_DISASSOC_MAP_MAX     ( 1 )
 #define CFG_ENABLE_DEAUTH_TO_DISASSOC_MAP_DEFAULT ( 0 )
 
+/*
+ * If last disconnection was due to HB failure and we reconnect
+ * to same AP next time, send Deauth before starting connection
+ */
+#define CFG_ENABLE_DEAUTH_BEFORE_CONNECTION                  "gSendDeauthBeforeCon"
+#define CFG_ENABLE_DEAUTH_BEFORE_CONNECTION_MIN              (0)
+#define CFG_ENABLE_DEAUTH_BEFORE_CONNECTION_MAX              (1)
+#define CFG_ENABLE_DEAUTH_BEFORE_CONNECTION_DEFAULT          (0)
+
 #define CFG_ENABLE_MAC_ADDR_SPOOFING               "gEnableMacAddrSpoof"
 #define CFG_ENABLE_MAC_ADDR_SPOOFING_MIN           (0)
 #define CFG_ENABLE_MAC_ADDR_SPOOFING_MAX           (1)
@@ -2858,10 +2872,20 @@ This feature requires the dependent cfg.ini "gRoamPrefer5GHz" set to 1 */
 #define CFG_INFORM_BSS_RSSI_RAW_MAX                (1)
 #define CFG_INFORM_BSS_RSSI_RAW_DEFAULT            (1)
 
-#define CFG_P2P_LISTEN_DEFER_INTERVAL_NAME        "gP2PListenDeferInterval"
-#define CFG_P2P_LISTEN_DEFER_INTERVAL_MIN         (100)
-#define CFG_P2P_LISTEN_DEFER_INTERVAL_MAX         (200)
-#define CFG_P2P_LISTEN_DEFER_INTERVAL_DEFAULT     (100)
+#define CFG_TX_CHAIN_MASK_CCK          "gCckChainMaskEnable"
+#define CFG_TX_CHAIN_MASK_CCK_MIN      (0)
+#define CFG_TX_CHAIN_MASK_CCK_MAX      (1)
+#define CFG_TX_CHAIN_MASK_CCK_DEFAULT  (0)
+
+#define CFG_TX_CHAIN_MASK_1SS       "gTxChainMask1ss"
+#define CFG_TX_CHAIN_MASK_1SS_MIN      (0)
+#define CFG_TX_CHAIN_MASK_1SS_MAX      (3)
+#define CFG_TX_CHAIN_MASK_1SS_DEFAULT  (1)
+
+#define CFG_SELF_GEN_FRM_PWR        "gSelfGenFrmPwr"
+#define CFG_SELF_GEN_FRM_PWR_MIN      (0)
+#define CFG_SELF_GEN_FRM_PWR_MAX      (0xffff)
+#define CFG_SELF_GEN_FRM_PWR_DEFAULT  (0)
 
 /*---------------------------------------------------------------------------
   Type declarations
@@ -3477,6 +3501,11 @@ typedef struct
    uint16_t                    p2p_listen_defer_interval;
    v_BOOL_t                    ignorePeerErpInfo;
    uint16_t                    pkt_err_disconn_th;
+   v_BOOL_t                    sendDeauthBeforeCon;
+   bool                        tx_chain_mask_cck;
+   uint8_t                     tx_chain_mask_1ss;
+   uint16_t                    self_gen_frm_pwr;
+
 } hdd_config_t;
 
 #ifdef WLAN_FEATURE_MBSSID

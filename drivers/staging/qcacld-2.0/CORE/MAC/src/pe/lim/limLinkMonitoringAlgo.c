@@ -131,7 +131,7 @@ limDeleteStaContext(tpAniSirGlobal pMac, tpSirMsgQ limMsg)
                                    eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON,
                                    pMsg->addr2, psessionEntry, FALSE);
                  limTearDownLinkWithAp(pMac, psessionEntry->peSessionId,
-                                 eSIR_MAC_PEER_STA_REQ_LEAVING_BSS_REASON);
+                                 eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON);
                  /* only break for STA role (non TDLS) */
                  break;
              }
@@ -186,12 +186,14 @@ limDeleteStaContext(tpAniSirGlobal pMac, tpSirMsgQ limMsg)
                     PELOGW(limLog(pMac, LOGW, FL("lim Delete Station Context (staId: %d, assocId: %d) "),
                                 pMsg->staId, pMsg->assocId);)
 
-                    pStaDs->mlmStaContext.disassocReason = eSIR_MAC_UNSPEC_FAILURE_REASON;
+                    pStaDs->mlmStaContext.disassocReason =
+                            eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON;
                     pStaDs->mlmStaContext.cleanupTrigger = eLIM_LINK_MONITORING_DEAUTH;
 
                     // Issue Deauth Indication to SME.
                     vos_mem_copy((tANI_U8 *) &mlmDeauthInd.peerMacAddr,
                                   pStaDs->staAddr, sizeof(tSirMacAddr));
+
                     mlmDeauthInd.reasonCode    = (tANI_U8) pStaDs->mlmStaContext.disassocReason;
                     mlmDeauthInd.deauthTrigger =  pStaDs->mlmStaContext.cleanupTrigger;
 
@@ -391,6 +393,31 @@ limTearDownLinkWithAp(tpAniSirGlobal pMac, tANI_U8 sessionId, tSirMacReasonCodes
         vos_mem_copy((tANI_U8 *) &mlmDeauthInd.peerMacAddr,
                       pStaDs->staAddr,
                       sizeof(tSirMacAddr));
+
+        /*
+         * if sendDeauthBeforeCon is enabled and reasoncode is
+         * Beacon Missed Store the MAC of AP in the flip flop
+         * buffer. This MAC will be used to send Deauth before
+         * connection, if we connect to same AP after HB failure.
+        */
+        if (pMac->roam.configParam.sendDeauthBeforeCon &&
+                          eSIR_BEACON_MISSED == reasonCode)
+        {
+            int apCount = pMac->lim.gLimHeartBeatApMacIndex;
+
+            if (pMac->lim.gLimHeartBeatApMacIndex)
+                pMac->lim.gLimHeartBeatApMacIndex = 0;
+            else
+                pMac->lim.gLimHeartBeatApMacIndex = 1;
+
+            limLog(pMac, LOGE, FL("HB Failure on MAC "
+                   MAC_ADDRESS_STR" Store it on Index %d"),
+                   MAC_ADDR_ARRAY(pStaDs->staAddr),apCount);
+
+            sirCopyMacAddr(pMac->lim.gLimHeartBeatApMac[apCount],
+                                                    pStaDs->staAddr);
+        }
+
         mlmDeauthInd.reasonCode    = (tANI_U8) pStaDs->mlmStaContext.disassocReason;
         mlmDeauthInd.deauthTrigger =  pStaDs->mlmStaContext.cleanupTrigger;
 
@@ -496,7 +523,8 @@ void limHandleHeartBeatFailure(tpAniSirGlobal pMac,tpPESession psessionEntry)
             }
             /* Connected on DFS channel so should not send the probe request
             * tear down the link directly */
-            limTearDownLinkWithAp(pMac, psessionEntry->peSessionId, eSIR_MAC_UNSPEC_FAILURE_REASON);
+            limTearDownLinkWithAp(pMac, psessionEntry->peSessionId,
+                                                       eSIR_BEACON_MISSED);
         }
     }
     else

@@ -262,6 +262,8 @@ struct statsContext
    struct completion completion;
    hdd_adapter_t *pAdapter;
    unsigned int magic;
+   union iwreq_data *wrqu;
+   char *extra;
 };
 
 struct linkspeedContext
@@ -817,11 +819,6 @@ typedef struct hdd_scaninfo_s
 
    hdd_scan_pending_option_e scan_pending_option;
 
-#ifdef FEATURE_WLAN_SCAN_PNO
-   /* The PNO scan pending  */
-   v_BOOL_t mPnoScanPending;
-#endif
-
 }hdd_scaninfo_t;
 
 #define WLAN_HDD_MAX_MC_ADDR_LIST 10
@@ -1108,8 +1105,6 @@ struct hdd_adapter_s
     /* Time stamp for last completed RoC request */
     v_TIME_t lastRocTs;
 
-    /* work queue to defer the back to back p2p_listen */
-    struct delayed_work roc_work;
 };
 
 #define WLAN_HDD_GET_STATION_CTX_PTR(pAdapter) (&(pAdapter)->sessionCtx.station)
@@ -1502,13 +1497,13 @@ struct hdd_context_s
     /* Time since boot up to WiFi turn ON (in micro seconds) */
     v_U64_t wifi_turn_on_time_since_boot;
 
+    /* RoC request queue and work */
+    struct delayed_work rocReqWork;
     /* number of rf chains supported by target */
     uint32_t  num_rf_chains;
 
     /* Is htTxSTBC supported by target */
     uint8_t   ht_tx_stbc_supported;
-    /* RoC request queue and work */
-    struct work_struct rocReqWork;
     hdd_list_t hdd_roc_req_q;
 
 #ifdef WLAN_NS_OFFLOAD
@@ -1591,9 +1586,9 @@ void wlan_hdd_incr_active_session(hdd_context_t *pHddCtx,
 void wlan_hdd_decr_active_session(hdd_context_t *pHddCtx,
                                   tVOS_CON_MODE mode);
 void wlan_hdd_reset_prob_rspies(hdd_adapter_t* pHostapdAdapter);
-void hdd_prevent_suspend(void);
-void hdd_allow_suspend(void);
-void hdd_prevent_suspend_timeout(v_U32_t timeout);
+void hdd_prevent_suspend(uint32_t reason);
+void hdd_allow_suspend(uint32_t reason);
+void hdd_prevent_suspend_timeout(v_U32_t timeout, uint32_t reason);
 bool hdd_is_ssr_required(void);
 void hdd_set_ssr_required(e_hdd_ssr_required value);
 
