@@ -64,6 +64,7 @@
 #include "wlan_qct_wda.h"
 
 #include "pmmApi.h"
+#include "wma.h"
 
 #define BA_DEFAULT_TX_BUFFER_SIZE 64
 
@@ -396,6 +397,8 @@ __limProcessOperatingModeActionFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo
     tpDphHashNode           pSta;
     tANI_U16                aid;
     tANI_U8  operMode;
+    tANI_U8  ch_bw = 0;
+    tANI_U8  skip_opmode_update = false;
 
     pHdr = WDA_GET_RX_MAC_HEADER(pRxPacketInfo);
     pBody = WDA_GET_RX_MPDU_DATA(pRxPacketInfo);
@@ -432,8 +435,16 @@ __limProcessOperatingModeActionFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo
     pSta = dphLookupHashEntry(pMac, pHdr->sa, &aid, &psessionEntry->dph.dphHashTable);
 
     operMode = pSta->vhtSupportedChannelWidthSet ? eHT_CHANNEL_WIDTH_80MHZ : pSta->htSupportedChannelWidthSet ? eHT_CHANNEL_WIDTH_40MHZ: eHT_CHANNEL_WIDTH_20MHZ;
-    if( operMode != pOperatingModeframe->OperatingMode.chanWidth)
+
+    if ((operMode == eHT_CHANNEL_WIDTH_80MHZ) &&
+        (pOperatingModeframe->OperatingMode.chanWidth >
+             eHT_CHANNEL_WIDTH_80MHZ))
+        skip_opmode_update = true;
+
+    if (!skip_opmode_update &&
+        (operMode != pOperatingModeframe->OperatingMode.chanWidth))
     {
+        uint32_t fw_vht_ch_wd = wma_get_vht_ch_width();
         limLog(pMac, LOGE,
             FL(" received Chanwidth %d, staIdx = %d"),
             (pOperatingModeframe->OperatingMode.chanWidth ),
@@ -448,23 +459,33 @@ __limProcessOperatingModeActionFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo
             pHdr->sa[4],
             pHdr->sa[5]);
 
-        if(pOperatingModeframe->OperatingMode.chanWidth == eHT_CHANNEL_WIDTH_80MHZ)
-        {
+        if ((pOperatingModeframe->OperatingMode.chanWidth >
+                eHT_CHANNEL_WIDTH_80MHZ) &&
+             (fw_vht_ch_wd > eHT_CHANNEL_WIDTH_80MHZ)) {
+            pSta->vhtSupportedChannelWidthSet =
+                WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ;
+            pSta->htSupportedChannelWidthSet = eHT_CHANNEL_WIDTH_40MHZ;
+            ch_bw = eHT_CHANNEL_WIDTH_160MHZ;
+        } else if(pOperatingModeframe->OperatingMode.chanWidth >=
+                eHT_CHANNEL_WIDTH_80MHZ) {
             pSta->vhtSupportedChannelWidthSet = WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ;
             pSta->htSupportedChannelWidthSet = eHT_CHANNEL_WIDTH_40MHZ;
-        }
-        else if(pOperatingModeframe->OperatingMode.chanWidth == eHT_CHANNEL_WIDTH_40MHZ)
-        {
-            pSta->vhtSupportedChannelWidthSet = WNI_CFG_VHT_CHANNEL_WIDTH_20_40MHZ;
+            ch_bw = eHT_CHANNEL_WIDTH_80MHZ;
+        } else if(pOperatingModeframe->OperatingMode.chanWidth ==
+                eHT_CHANNEL_WIDTH_40MHZ) {
+            pSta->vhtSupportedChannelWidthSet =
+                WNI_CFG_VHT_CHANNEL_WIDTH_20_40MHZ;
             pSta->htSupportedChannelWidthSet = eHT_CHANNEL_WIDTH_40MHZ;
-        }
-        else if(pOperatingModeframe->OperatingMode.chanWidth == eHT_CHANNEL_WIDTH_20MHZ)
-        {
-            pSta->vhtSupportedChannelWidthSet = WNI_CFG_VHT_CHANNEL_WIDTH_20_40MHZ;
+            ch_bw = eHT_CHANNEL_WIDTH_40MHZ;
+        } else if(pOperatingModeframe->OperatingMode.chanWidth ==
+                eHT_CHANNEL_WIDTH_20MHZ) {
+            pSta->vhtSupportedChannelWidthSet =
+                WNI_CFG_VHT_CHANNEL_WIDTH_20_40MHZ;
             pSta->htSupportedChannelWidthSet = eHT_CHANNEL_WIDTH_20MHZ;
+            ch_bw = eHT_CHANNEL_WIDTH_20MHZ;
         }
-        limCheckVHTOpModeChange( pMac, psessionEntry,
-                                 (pOperatingModeframe->OperatingMode.chanWidth),
+        limCheckVHTOpModeChange(pMac, psessionEntry,
+                                 ch_bw,
                                  pSta->staIndex, pHdr->sa);
     }
 
@@ -1479,9 +1500,13 @@ __limProcessAddBAReq( tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo,tpPESession ps
         goto returnAfterError;
     }
 
-    limLog( pMac, LOGW,
-      FL( "ADDBA Req from STA with AID %d, tid = %d" ),
-      aid, frmAddBAReq.AddBAParameterSet.tid);
+    limLog( pMac, LOG1, FL( "ADDBA Req from STA "MAC_ADDRESS_STR " with AID %d"
+                            " tid = %d policy = %d buffsize = %d"
+                            " amsduSupported = %d"), MAC_ADDR_ARRAY(pHdr->sa),
+                            aid, frmAddBAReq.AddBAParameterSet.tid,
+                            frmAddBAReq.AddBAParameterSet.policy,
+                            frmAddBAReq.AddBAParameterSet.bufferSize,
+                            frmAddBAReq.AddBAParameterSet.amsduSupported);
 
 #ifdef WLAN_SOFTAP_VSTA_FEATURE
     // we can only do BA on "hard" STAs
@@ -1671,9 +1696,15 @@ tANI_U8 *pBody;
     PELOG2(sirDumpBuf( pMac, SIR_DBG_MODULE_ID, LOG2, pBody, frameLen );)
   }
 
-  limLog( pMac, LOGE,
-      FL( "ADDBA Rsp from STA with AID %d, tid = %d, status = %d" ),
-      aid, frmAddBARsp.AddBAParameterSet.tid, frmAddBARsp.Status.status);
+  limLog( pMac, LOG1, FL( "ADDBA Rsp from STA "MAC_ADDRESS_STR " with AID %d "
+                          "tid = %d policy = %d buffsize = %d "
+                          "amsduSupported = %d status = %d"),
+                          MAC_ADDR_ARRAY(pHdr->sa), aid,
+                          frmAddBARsp.AddBAParameterSet.tid,
+                          frmAddBARsp.AddBAParameterSet.policy,
+                          frmAddBARsp.AddBAParameterSet.bufferSize,
+                          frmAddBARsp.AddBAParameterSet.amsduSupported,
+                          frmAddBARsp.Status.status);
 
   //if there is no matchin dialougue token then ignore the response.
 
