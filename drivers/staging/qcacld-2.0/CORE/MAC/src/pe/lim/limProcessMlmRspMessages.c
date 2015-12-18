@@ -542,6 +542,12 @@ limSendMlmAssocReq( tpAniSirGlobal pMac,
     PELOG1(limLog(pMac, LOG1, FL("SessionId:%d Authenticated with BSS"),
            psessionEntry->peSessionId);)
 
+    if (NULL == psessionEntry->pLimJoinReq) {
+        limLog(pMac, LOGE, FL("Join Request is NULL."));
+        /* No need to Assert. JOIN timeout will handle this error */
+        return;
+    }
+
     pMlmAssocReq = vos_mem_malloc(sizeof(tLimMlmAssocReq));
     if ( NULL == pMlmAssocReq ) {
         limLog(pMac, LOGP, FL("call to AllocateMemory failed for mlmAssocReq"));
@@ -634,6 +640,10 @@ limSendMlmAssocReq( tpAniSirGlobal pMac,
         }
     }
 
+#ifdef FEATURE_WLAN_DIAG_SUPPORT
+    limDiagEventReport(pMac, WLAN_PE_DIAG_ASSOC_REQ_EVENT, psessionEntry,
+                       eSIR_SUCCESS, eSIR_SUCCESS);
+#endif
     pMlmAssocReq->listenInterval = (tANI_U16)val;
     /* Update PE session ID*/
     pMlmAssocReq->sessionId = psessionEntry->peSessionId;
@@ -1566,9 +1576,9 @@ limProcessMlmDeauthCnf(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
     if ((psessionEntry->limSystemRole == eLIM_STA_ROLE)|| (psessionEntry->limSystemRole == eLIM_BT_AMP_STA_ROLE))
     {
         // Deauth Confirm from MLM
-        if (psessionEntry->limSmeState != eLIM_SME_WT_DEAUTH_STATE)
-        {
-            /**
+        if ((psessionEntry->limSmeState != eLIM_SME_WT_DISASSOC_STATE) &&
+            (psessionEntry->limSmeState != eLIM_SME_WT_DEAUTH_STATE)) {
+            /*
              * Should not have received Deauth confirm
              * from MLM in other states.
              * Log error
@@ -3007,7 +3017,7 @@ limProcessStaMlmAddBssRspFT(tpAniSirGlobal pMac, tpSirMsgQ limMsgQ, tpPESession 
          * TQ STA will do Greenfield only with TQ AP, for
          * everybody else it will be turned off.
          */
-        if( (psessionEntry->pLimJoinReq != NULL))
+        if( (psessionEntry->pLimJoinReq != NULL) && (!psessionEntry->pLimJoinReq->bssDescription.aniIndicator))
         {
             limLog( pMac, LOGE, FL(" Turning off Greenfield, when adding self entry"));
             pAddStaParams->greenFieldCapable = WNI_CFG_GREENFIELD_CAPABILITY_DISABLE;

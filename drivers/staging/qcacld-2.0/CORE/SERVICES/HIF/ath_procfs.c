@@ -39,6 +39,7 @@
 #include "if_ath_sdio.h"
 #endif
 #include "vos_api.h"
+#include <adf_os_atomic.h>
 
 #define PROCFS_NAME		"athdiagpfs"
 #define PROCFS_DIR		"cld"

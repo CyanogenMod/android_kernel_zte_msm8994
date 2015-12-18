@@ -958,21 +958,22 @@ static int __wlan_hdd_ipv4_changed(struct notifier_block *nb,
 	}
 
 	adapter = WLAN_HDD_GET_PRIV_PTR(ndev);
+	if (!adapter) return NOTIFY_DONE;
 	if (WLAN_HDD_ADAPTER_MAGIC != adapter->magic) return NOTIFY_DONE;
 	if (adapter->dev != ndev) return NOTIFY_DONE;
 	if (WLAN_HDD_GET_CTX(adapter) != hdd_ctx) return NOTIFY_DONE;
+        if (!(adapter->device_mode == WLAN_HDD_INFRA_STATION ||
+                adapter->device_mode == WLAN_HDD_P2P_CLIENT))
+		return NOTIFY_DONE;
 
-	if (adapter->device_mode == WLAN_HDD_INFRA_STATION ||
-		adapter->device_mode == WLAN_HDD_P2P_CLIENT) {
-		if ((hdd_ctx->cfg_ini->nEnableSuspend !=
-			WLAN_MAP_SUSPEND_TO_MCAST_BCAST_FILTER) ||
+	if ((hdd_ctx->cfg_ini->nEnableSuspend !=
+				WLAN_MAP_SUSPEND_TO_MCAST_BCAST_FILTER) ||
 			(!hdd_ctx->cfg_ini->fhostArpOffload)) {
-			hddLog(LOG1, FL("Offload not enabled MCBC=%d, ARPOffload=%d"),
+		hddLog(LOG1, FL("Offload not enabled MCBC=%d, ARPOffload=%d"),
 				hdd_ctx->cfg_ini->nEnableSuspend,
 				hdd_ctx->cfg_ini->fhostArpOffload);
 
-			return NOTIFY_DONE;
-		}
+		return NOTIFY_DONE;
 	}
 
 	in_dev = __in_dev_get_rtnl(adapter->dev);
@@ -1041,7 +1042,8 @@ VOS_STATUS hdd_conf_arp_offload(hdd_adapter_t *pAdapter, int fenable)
    tSirHostOffloadReq  offLoadRequest;
    hdd_context_t *pHddCtx = WLAN_HDD_GET_CTX(pAdapter);
 
-   hddLog(VOS_TRACE_LEVEL_ERROR, FL(" fenable = %d \n"), fenable);
+   hddLog(LOG1, FL(" fenable = %d \n"), fenable);
+
    if(fenable)
    {
        if ((in_dev = __in_dev_get_rtnl(pAdapter->dev)) != NULL)
@@ -1232,14 +1234,6 @@ static void hdd_conf_suspend_ind(hdd_context_t* pHddCtx,
         //Configure supported OffLoads
         hdd_conf_hostoffload(pAdapter, TRUE);
         wlanSuspendParam->configuredMcstBcstFilterSetting = pHddCtx->configuredMcastBcastFilter;
-
-#ifdef WLAN_FEATURE_PACKET_FILTERING
-        /* During suspend, configure MC Addr list filter to the firmware
-         * function takes care of checking necessary conditions before
-         * configuring.
-         */
-        wlan_hdd_set_mc_addr_list(pAdapter, TRUE);
-#endif
     }
 
     if ((eConnectionState_Associated ==
@@ -1298,14 +1292,6 @@ static void hdd_conf_resume_ind(hdd_adapter_t *pAdapter)
            "offload: in hdd_conf_resume_ind, restoring configuredMcastBcastFilter");
     hddLog(VOS_TRACE_LEVEL_INFO, "configuredMcastBcastFilter = %d",
                   pHddCtx->configuredMcastBcastFilter);
-
-
-#ifdef WLAN_FEATURE_PACKET_FILTERING
-    /* Filter was applied during suspend indication
-     * clear it when we resume.
-     */
-    wlan_hdd_set_mc_addr_list(pAdapter, FALSE);
-#endif
 }
 
 //Suspend routine registered with Android OS
@@ -2252,6 +2238,11 @@ VOS_STATUS hdd_wlan_re_init(void *hif_sc)
       goto err_unregister_pmops;
    }
    vos_set_reinit_in_progress(VOS_MODULE_ID_VOSS, FALSE);
+   sme_set_rssi_threshold_breached_cb(pHddCtx->hHal, hdd_rssi_threshold_breached);
+#ifdef FEATURE_WLAN_EXTSCAN
+   sme_ExtScanRegisterCallback(pHddCtx->hHal,
+                               wlan_hdd_cfg80211_extscan_callback);
+#endif /* FEATURE_WLAN_EXTSCAN */
 
 #ifdef WLAN_FEATURE_LPSS
    wlan_hdd_send_all_scan_intf_info(pHddCtx);
