@@ -290,11 +290,14 @@ int hdd_hostapd_stop (struct net_device *dev)
 {
    ENTER();
 
-   //Stop all tx queues
-   netif_tx_disable(dev);
+   if (NULL != dev) {
+       //Stop all tx queues
+       hddLog(LOG1, FL("Disabling queues"));
+       netif_tx_disable(dev);
 
-   //Turn OFF carrier state
-   netif_carrier_off(dev);
+       //Turn OFF carrier state
+       netif_carrier_off(dev);
+   }
 
    EXIT();
    return 0;
@@ -313,19 +316,29 @@ associated with the device
   --------------------------------------------------------------------------*/
 static void hdd_hostapd_uninit (struct net_device *dev)
 {
-   hdd_adapter_t *pHostapdAdapter = netdev_priv(dev);
+	hdd_adapter_t *adapter = netdev_priv(dev);
+	hdd_context_t *hdd_ctx;
 
-   ENTER();
+	ENTER();
 
-   if (pHostapdAdapter && pHostapdAdapter->pHddCtx)
-   {
-      hdd_deinit_adapter(pHostapdAdapter->pHddCtx, pHostapdAdapter);
+	if (WLAN_HDD_ADAPTER_MAGIC != adapter->magic) {
+		hddLog(LOGE, FL("Invalid magic"));
+		return;
+	}
 
-      /* after uninit our adapter structure will no longer be valid */
-      pHostapdAdapter->dev = NULL;
-   }
+	hdd_ctx = WLAN_HDD_GET_CTX(adapter);
+	if (NULL == hdd_ctx) {
+		hddLog(LOGE, FL("NULL hdd_ctx"));
+		return;
+	}
 
-   EXIT();
+	hdd_deinit_adapter(hdd_ctx, adapter, true);
+
+	/* after uninit our adapter structure will no longer be valid */
+	adapter->dev = NULL;
+	adapter->magic = 0;
+
+	EXIT();
 }
 
 
@@ -354,6 +367,11 @@ static int hdd_hostapd_driver_command(hdd_adapter_t *pAdapter,
 {
    tANI_U8 *command = NULL;
    int ret = 0;
+
+   if (VOS_FTM_MODE == hdd_get_conparam()) {
+        hddLog(LOGE, FL("Command not allowed in FTM mode"));
+        return -EINVAL;
+   }
 
    /*
     * Note that valid pointers are provided by caller
@@ -400,12 +418,6 @@ static int hdd_hostapd_driver_command(hdd_adapter_t *pAdapter,
    {
       hdd_setP2pOpps(pAdapter->dev, command);
    }
-#ifdef FEATURE_WLAN_BATCH_SCAN
-   else if (strncmp(command, "WLS_BATCHING", 12) == 0)
-   {
-      ret = hdd_handle_batch_scan_ioctl(pAdapter, priv_data, command);
-   }
-#endif
    else if (strncmp(command, "SET_SAP_CHANNEL_LIST", 20) == 0)
    {
       /*
@@ -515,7 +527,6 @@ static int hdd_hostapd_ioctl(struct net_device *dev,
    pHddCtx = WLAN_HDD_GET_CTX(pAdapter);
    ret = wlan_hdd_validate_context(pHddCtx);
    if (ret) {
-      hddLog(VOS_TRACE_LEVEL_ERROR, "%s: invalid context", __func__);
       ret = -EBUSY;
       goto exit;
    }
@@ -693,6 +704,7 @@ void hdd_clear_all_sta(hdd_adapter_t *pHostapdAdapter, v_PVOID_t usrDataForCallb
 {
     v_U8_t staId = 0;
     struct net_device *dev;
+    struct tagCsrDelStaParams delStaParams;
     dev = (struct net_device *)usrDataForCallback;
 
     hddLog(LOGE, FL("Clearing all the STA entry...."));
@@ -701,13 +713,18 @@ void hdd_clear_all_sta(hdd_adapter_t *pHostapdAdapter, v_PVOID_t usrDataForCallb
         if ( pHostapdAdapter->aStaInfo[staId].isUsed &&
            ( staId != (WLAN_HDD_GET_AP_CTX_PTR(pHostapdAdapter))->uBCStaId))
         {
+             WLANSAP_PopulateDelStaParams(&pHostapdAdapter->aStaInfo[staId].macAddrSTA.bytes[0],
+                                                    eSIR_MAC_DEAUTH_LEAVING_BSS_REASON,
+                                                    (SIR_MAC_MGMT_DISASSOC >> 4),
+                                                     &delStaParams);
             //Disconnect all the stations
-            hdd_softap_sta_disassoc(pHostapdAdapter, &pHostapdAdapter->aStaInfo[staId].macAddrSTA.bytes[0]);
+            hdd_softap_sta_disassoc(pHostapdAdapter, &delStaParams);
         }
     }
 }
 
-static int hdd_stop_p2p_link(hdd_adapter_t *pHostapdAdapter,v_PVOID_t usrDataForCallback)
+static int hdd_stop_bss_link(hdd_adapter_t *pHostapdAdapter,
+                             v_PVOID_t usrDataForCallback)
 {
     struct net_device *dev;
     hdd_context_t     *pHddCtx = NULL;
@@ -731,9 +748,8 @@ static int hdd_stop_p2p_link(hdd_adapter_t *pHostapdAdapter,v_PVOID_t usrDataFor
         status = WLANSAP_StopBss((WLAN_HDD_GET_CTX(pHostapdAdapter))->pvosContext);
 #endif
         if (VOS_IS_STATUS_SUCCESS(status))
-        {
-            VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR, FL("Deleting P2P link!!!!!!"));
-        }
+            hddLog(LOGE, FL("Deleting SAP/P2P link!!!!!!"));
+
         clear_bit(SOFTAP_BSS_STARTED, &pHostapdAdapter->event_flags);
         wlan_hdd_decr_active_session(pHddCtx, pHostapdAdapter->device_mode);
     }
@@ -865,8 +881,10 @@ VOS_STATUS hdd_hostapd_SAPEventCB( tpSap_Event pSapEvent, v_PVOID_t usrDataForCa
 
                 //@@@ need wep logic here to set privacy bit
                 vos_status = hdd_softap_Register_BC_STA(pHostapdAdapter, pHddApCtx->uPrivacy);
-                if (!VOS_IS_STATUS_SUCCESS(vos_status))
+                if (!VOS_IS_STATUS_SUCCESS(vos_status)) {
                     hddLog(LOGW, FL("Failed to register BC STA %d"), vos_status);
+                    hdd_stop_bss_link(pHostapdAdapter, usrDataForCallback);
+                }
             }
 #ifdef IPA_OFFLOAD
             if (hdd_ipa_is_enabled(pHddCtx))
@@ -1452,11 +1470,10 @@ VOS_STATUS hdd_hostapd_SAPEventCB( tpSap_Event pSapEvent, v_PVOID_t usrDataForCa
             return VOS_STATUS_SUCCESS;
 
         case eSAP_MAC_TRIG_STOP_BSS_EVENT :
-            vos_status = hdd_stop_p2p_link(pHostapdAdapter, usrDataForCallback);
+            vos_status = hdd_stop_bss_link(pHostapdAdapter, usrDataForCallback);
             if (!VOS_IS_STATUS_SUCCESS(vos_status))
-            {
-                hddLog(LOGW, FL("hdd_stop_p2p_link failed %d"), vos_status);
-            }
+                hddLog(LOGW, FL("hdd_stop_bss_link failed %d"), vos_status);
+
             return VOS_STATUS_SUCCESS;
 
         case eSAP_CHANNEL_CHANGE_EVENT:
@@ -2738,6 +2755,19 @@ static iw_softap_setparam(struct net_device *dev,
                 ret = wlan_hdd_update_phymode(dev, hHal, set_value, phddctx);
                 break;
             }
+
+        case QCASAP_PARAM_LDPC:
+            ret = hdd_set_ldpc(pHostapdAdapter, set_value);
+            break;
+
+        case QCASAP_PARAM_TX_STBC:
+            ret = hdd_set_tx_stbc(pHostapdAdapter, set_value);
+            break;
+
+        case QCASAP_PARAM_RX_STBC:
+            ret = hdd_set_rx_stbc(pHostapdAdapter, set_value);
+            break;
+
         default:
             hddLog(LOGE, FL("Invalid setparam command %d value %d"),
                     sub_cmd, set_value);
@@ -2948,6 +2978,18 @@ static iw_softap_getparam(struct net_device *dev,
                         VDEV_CMD);
             break;
         }
+
+    case QCASAP_PARAM_LDPC:
+        ret = hdd_get_ldpc(pHostapdAdapter, value);
+        break;
+
+    case QCASAP_PARAM_TX_STBC:
+        ret = hdd_get_tx_stbc(pHostapdAdapter, value);
+        break;
+
+    case QCASAP_PARAM_RX_STBC:
+        ret = hdd_get_rx_stbc(pHostapdAdapter, value);
+        break;
 
     default:
         hddLog(LOGE, FL("Invalid getparam command %d"), sub_cmd);
@@ -3202,9 +3244,9 @@ static iw_softap_disassoc_sta(struct net_device *dev,
 {
     hdd_adapter_t *pHostapdAdapter = (netdev_priv(dev));
     v_U8_t *peerMacAddr;
+    struct tagCsrDelStaParams delStaParams;
 
     ENTER();
-
     if (!capable(CAP_NET_ADMIN)) {
         VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
                  FL("permission check failed"));
@@ -3218,7 +3260,14 @@ static iw_softap_disassoc_sta(struct net_device *dev,
 
     hddLog(LOG1, "%s data "  MAC_ADDRESS_STR,
            __func__, MAC_ADDR_ARRAY(peerMacAddr));
-    hdd_softap_sta_disassoc(pHostapdAdapter, peerMacAddr);
+
+
+    WLANSAP_PopulateDelStaParams(peerMacAddr,
+                   eSIR_MAC_DEAUTH_LEAVING_BSS_REASON,
+                   (SIR_MAC_MGMT_DISASSOC >> 4),
+                   &delStaParams);
+
+    hdd_softap_sta_disassoc(pHostapdAdapter, &delStaParams);
     EXIT();
     return 0;
 }
@@ -3263,6 +3312,18 @@ static iw_softap_ap_stats(struct net_device *dev,
     }
     wrqu->data.length -= len;
     kfree(pstatbuf);
+    return 0;
+}
+
+int
+static iw_softap_get_stats(struct net_device *dev,
+                           struct iw_request_info *info,
+                           union iwreq_data *wrqu, char *extra)
+{
+    hdd_adapter_t *p_host_adapter = netdev_priv(dev);
+
+    hdd_wlan_get_stats(p_host_adapter, &(wrqu->data.length),
+                       extra, WE_MAX_STR_LEN);
     return 0;
 }
 
@@ -3339,7 +3400,8 @@ int iw_softap_get_channel_list(struct net_device *dev,
 
     for( i = bandStartChannel; i <= bandEndChannel; i++ )
     {
-        if( NV_CHANNEL_ENABLE == regChannels[i].enabled )
+        if ((NV_CHANNEL_ENABLE == regChannels[i].enabled) ||
+            (NV_CHANNEL_DFS == regChannels[i].enabled))
         {
             channel_list->channels[num_channels] = rfChannels[i].channelNum;
             num_channels++;
@@ -4523,251 +4585,6 @@ int iw_get_softap_linkspeed(struct net_device *dev,
    return 0;
 }
 
-/**
- * hdd_get_rssi_cb() - get station's rssi callback
- * @sta_rssi: pointer of rssi information
- * @context: get rssi callback context
- *
- * This function will fill rssi information to hostapd
- * adapter
- *
- */
-void hdd_get_rssi_cb(struct sir_rssi_resp *sta_rssi, void *context)
-{
-	struct statsContext *get_rssi_context;
-	struct sir_rssi_info *rssi_info;
-	uint8_t peer_num;
-	int i;
-	int buf = 0;
-	int length = 0;
-	char *rssi_info_output;
-	union iwreq_data *wrqu;
-
-	if ((NULL == sta_rssi) || (NULL == context)) {
-
-		hddLog(VOS_TRACE_LEVEL_ERROR,
-			"%s: Bad param, sta_rssi [%p] context [%p]",
-			__func__, sta_rssi, context);
-		return;
-	}
-
-	spin_lock(&hdd_context_lock);
-	/*
-	 * there is a race condition that exists between this callback
-	 * function and the caller since the caller could time out either
-	 * before or while this code is executing.  we use a spinlock to
-	 * serialize these actions
-	 */
-	get_rssi_context = context;
-	if (RSSI_CONTEXT_MAGIC !=
-			get_rssi_context->magic) {
-
-		/*
-		 * the caller presumably timed out so there is nothing
-		 * we can do
-		 */
-		spin_unlock(&hdd_context_lock);
-		hddLog(VOS_TRACE_LEVEL_WARN,
-			"%s: Invalid context, magic [%08x]",
-			__func__,
-			get_rssi_context->magic);
-		return;
-	}
-
-	rssi_info_output = get_rssi_context->extra;
-	wrqu = get_rssi_context->wrqu;
-	peer_num = sta_rssi->count;
-	rssi_info = sta_rssi->info;
-	get_rssi_context->magic = 0;
-
-	hddLog(LOG1, "%s : %d peers", __func__, peer_num);
-
-
-	/*
-	 * The iwpriv tool default print is before mac addr and rssi.
-	 * Add '\n' before first rssi item to align the frist rssi item
-	 * with others
-	 *
-	 * wlan     getRSSI:
-	 * [macaddr1] [rssi1]
-	 * [macaddr2] [rssi2]
-	 * [macaddr3] [rssi3]
-	 */
-	length = scnprintf((rssi_info_output), WE_MAX_STR_LEN, "\n");
-	for (i = 0; i < peer_num; i++) {
-		buf = scnprintf
-			(
-			(rssi_info_output + length), WE_MAX_STR_LEN - length,
-			"[%pM] [%d]\n",
-			rssi_info[i].peer_macaddr,
-			rssi_info[i].rssi
-			);
-			length += buf;
-	}
-	wrqu->data.length = length + 1;
-
-	/* notify the caller */
-	complete(&get_rssi_context->completion);
-
-	/* serialization is complete */
-	spin_unlock(&hdd_context_lock);
-}
-
-/**
- * wlan_hdd_get_peer_rssi() - get station's rssi
- * @adapter: hostapd interface
- * @macaddress: iwpriv request information
- * @wrqu: iwpriv command parameter
- * @extra
- *
- * This function will call sme_get_rssi to get rssi
- *
- * Return: 0 on success, otherwise error value
- */
-static int  wlan_hdd_get_peer_rssi(hdd_adapter_t *adapter,
-					v_MACADDR_t macaddress,
-					char *extra,
-					union iwreq_data *wrqu)
-{
-	eHalStatus hstatus;
-	unsigned long rc;
-	struct statsContext context;
-	struct sir_rssi_req rssi_req;
-
-	if (NULL == adapter) {
-		hddLog(VOS_TRACE_LEVEL_ERROR, "%s: pAdapter is NULL",
-			__func__);
-		return -EFAULT;
-	}
-
-	init_completion(&context.completion);
-	context.magic = RSSI_CONTEXT_MAGIC;
-	context.extra = extra;
-	context.wrqu = wrqu;
-
-	vos_mem_copy(&(rssi_req.peer_macaddr), &macaddress,
-				VOS_MAC_ADDR_SIZE);
-	rssi_req.sessionId = adapter->sessionId;
-	hstatus = sme_get_rssi(WLAN_HDD_GET_HAL_CTX(adapter),
-				rssi_req,
-				&context,
-				hdd_get_rssi_cb);
-	if (eHAL_STATUS_SUCCESS != hstatus) {
-		hddLog(VOS_TRACE_LEVEL_ERROR,
-			"%s: Unable to retrieve statistics for rssi",
-			__func__);
-		rc = -EFAULT;
-	} else {
-		rc = wait_for_completion_timeout(&context.completion,
-				msecs_to_jiffies(WLAN_WAIT_TIME_STATS));
-		if (!rc) {
-			hddLog(VOS_TRACE_LEVEL_ERROR,
-				"%s: SME timed out while retrieving rssi",
-				__func__);
-		}
-	}
-	/*
-	 * either we never sent a request, we sent a request and received a
-	 * response or we sent a request and timed out.  if we never sent a
-	 * request or if we sent a request and got a response, we want to
-	 * clear the magic out of paranoia.  if we timed out there is a
-	 * race condition such that the callback function could be
-	 * executing at the same time we are. of primary concern is if the
-	 * callback function had already verified the "magic" but had not
-	 * yet set the completion variable when a timeout occurred. we
-	 * serialize these activities by invalidating the magic while
-	 * holding a shared spinlock which will cause us to block if the
-	 * callback is currently executing
-	 */
-	spin_lock(&hdd_context_lock);
-	context.magic = 0;
-	spin_unlock(&hdd_context_lock);
-	return rc;
-}
-
-/**
- * __iw_get_peer_rssi() - get station's rssi
- * @dev: net device
- * @info: iwpriv request information
- * @wrqu: iwpriv command parameter
- * @extra
- *
- * This function will call wlan_hdd_get_peer_rssi
- * to get rssi
- *
- * Return: 0 on success, otherwise error value
- */
-static int
-__iw_get_peer_rssi(struct net_device *dev, struct iw_request_info *info,
-			union iwreq_data *wrqu, char *extra)
-{
-	hdd_adapter_t *adapter = (netdev_priv(dev));
-	hdd_context_t *hddctx;
-	char macaddrarray[18];
-	v_MACADDR_t macaddress = VOS_MAC_ADDR_BROADCAST_INITIALIZER;
-	VOS_STATUS status = VOS_STATUS_E_FAILURE;
-	int ret;
-
-	ENTER();
-
-	hddctx = WLAN_HDD_GET_CTX(adapter);
-	ret = wlan_hdd_validate_context(hddctx);
-	if (0 != ret)
-		return ret;
-
-	hddLog(VOS_TRACE_LEVEL_INFO, "%s wrqu->data.length= %d",
-			__func__, wrqu->data.length);
-
-	if (wrqu->data.length >= MAC_ADDRESS_STR_LEN - 1) {
-
-		if (copy_from_user(macaddrarray,
-			wrqu->data.pointer, MAC_ADDRESS_STR_LEN - 1)) {
-
-			hddLog(LOG1, "%s: failed to copy data to user buffer",
-					__func__);
-			return -EFAULT;
-		}
-
-		macaddrarray[MAC_ADDRESS_STR_LEN - 1] = '\0';
-		hddLog(LOG1, "%s, %s",
-				__func__, macaddrarray);
-
-		status = hdd_string_to_hex(macaddrarray,
-				MAC_ADDRESS_STR_LEN, macaddress.bytes );
-
-		if (!VOS_IS_STATUS_SUCCESS(status)) {
-			hddLog(VOS_TRACE_LEVEL_ERROR,
-				FL("String to Hex conversion Failed"));
-		}
-	}
-
-	return wlan_hdd_get_peer_rssi(adapter, macaddress, extra, wrqu);
-}
-
-/**
- * iw_get_peer_rssi() - get station's rssi
- * @dev: net device
- * @info: iwpriv request information
- * @wrqu: iwpriv command parameter
- * @extra
- *
- * This function will call __iw_get_peer_rssi
- *
- * Return: 0 on success, otherwise error value
- */
-static int
-iw_get_peer_rssi(struct net_device *dev, struct iw_request_info *info,
-			union iwreq_data *wrqu, char *extra)
-{
-	int ret;
-
-	vos_ssr_protect(__func__);
-	ret = __iw_get_peer_rssi(dev, info, wrqu, extra);
-	vos_ssr_unprotect(__func__);
-
-	return ret;
-}
-
 static const iw_handler      hostapd_handler[] =
 {
    (iw_handler) NULL,           /* SIOCSIWCOMMIT */
@@ -5037,6 +4854,19 @@ static const struct iw_priv_args hostapd_private_args[] = {
         0,
         "setphymode" },
 
+    {   QCASAP_PARAM_LDPC,
+        IW_PRIV_TYPE_INT| IW_PRIV_SIZE_FIXED | 1,
+        0,
+        "set_ldpc" },
+    {   QCASAP_PARAM_TX_STBC,
+        IW_PRIV_TYPE_INT| IW_PRIV_SIZE_FIXED | 1,
+        0,
+        "set_tx_stbc" },
+    {   QCASAP_PARAM_RX_STBC,
+        IW_PRIV_TYPE_INT| IW_PRIV_SIZE_FIXED | 1,
+        0,
+        "set_rx_stbc" },
+
   { QCSAP_IOCTL_GETPARAM, 0,
       IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,    "getparam" },
   { QCSAP_IOCTL_GETPARAM, 0,
@@ -5071,6 +4901,12 @@ static const struct iw_priv_args hostapd_private_args[] = {
       IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,    "getdfsnol" },
   { QCSAP_GET_ACL, 0,
       IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,    "get_acl_list" },
+  { QCASAP_PARAM_LDPC, 0,
+      IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,    "get_ldpc" },
+  { QCASAP_PARAM_TX_STBC, 0,
+      IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,    "get_tx_stbc" },
+  { QCASAP_PARAM_RX_STBC, 0,
+      IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,    "get_rx_stbc" },
   { QCASAP_TX_CHAINMASK_CMD, 0,
       IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,    "get_txchainmask" },
   { QCASAP_RX_CHAINMASK_CMD, 0,
@@ -5096,12 +4932,12 @@ static const struct iw_priv_args hostapd_private_args[] = {
         IW_PRIV_TYPE_BYTE | IW_PRIV_SIZE_FIXED | 6 , 0, "disassoc_sta" },
   { QCSAP_IOCTL_AP_STATS, 0,
         IW_PRIV_TYPE_CHAR | QCSAP_MAX_WSC_IE, "ap_stats" },
+  { QCSAP_IOCTL_GET_STATS, 0,
+        IW_PRIV_TYPE_CHAR | WE_MAX_STR_LEN, "get_stats" },
   { QCSAP_IOCTL_PRIV_GET_SOFTAP_LINK_SPEED,
         IW_PRIV_TYPE_CHAR | 18,
         IW_PRIV_TYPE_CHAR | 5, "getLinkSpeed" },
-  { QCSAP_IOCTL_PRIV_GET_RSSI,
-        IW_PRIV_TYPE_CHAR | 18,
-        IW_PRIV_TYPE_CHAR | WE_MAX_STR_LEN, "getRSSI" },
+
   { QCSAP_IOCTL_PRIV_SET_THREE_INT_GET_NONE,
         IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 3, 0, "" },
    /* handlers for sub-ioctl */
@@ -5206,6 +5042,7 @@ static const iw_handler hostapd_private[] = {
    [QCSAP_IOCTL_ASSOC_STA_MACADDR - SIOCIWFIRSTPRIV] = iw_softap_getassoc_stamacaddr,
    [QCSAP_IOCTL_DISASSOC_STA - SIOCIWFIRSTPRIV] = iw_softap_disassoc_sta,
    [QCSAP_IOCTL_AP_STATS - SIOCIWFIRSTPRIV] = iw_softap_ap_stats,
+   [QCSAP_IOCTL_GET_STATS - SIOCIWFIRSTPRIV] = iw_softap_get_stats,
    [QCSAP_IOCTL_PRIV_SET_THREE_INT_GET_NONE - SIOCIWFIRSTPRIV]  = iw_set_three_ints_getnone,
    [QCSAP_IOCTL_PRIV_SET_VAR_INT_GET_NONE - SIOCIWFIRSTPRIV]     = iw_set_var_ints_getnone,
    [QCSAP_IOCTL_SET_CHANNEL_RANGE - SIOCIWFIRSTPRIV] = iw_softap_set_channel_range,
@@ -5213,7 +5050,6 @@ static const iw_handler hostapd_private[] = {
    [QCSAP_IOCTL_GET_CHANNEL_LIST - SIOCIWFIRSTPRIV]   = iw_softap_get_channel_list,
    [QCSAP_IOCTL_GET_STA_INFO - SIOCIWFIRSTPRIV] = iw_softap_get_sta_info,
    [QCSAP_IOCTL_PRIV_GET_SOFTAP_LINK_SPEED - SIOCIWFIRSTPRIV]     = iw_get_softap_linkspeed,
-   [QCSAP_IOCTL_PRIV_GET_RSSI - SIOCIWFIRSTPRIV] = iw_get_peer_rssi,
    [QCSAP_IOCTL_SET_TX_POWER - SIOCIWFIRSTPRIV]   = iw_softap_set_tx_power,
    [QCSAP_IOCTL_SET_MAX_TX_POWER - SIOCIWFIRSTPRIV]   = iw_softap_set_max_tx_power,
    [QCSAP_IOCTL_DATAPATH_SNAP_SHOT - SIOCIWFIRSTPRIV]  =   iw_display_data_path_snapshot,
@@ -5470,7 +5306,7 @@ VOS_STATUS hdd_register_hostapd( hdd_adapter_t *pAdapter, tANI_U8 rtnl_lock_held
    return status;
 }
 
-VOS_STATUS hdd_unregister_hostapd(hdd_adapter_t *pAdapter)
+VOS_STATUS hdd_unregister_hostapd(hdd_adapter_t *pAdapter, bool rtnl_held)
 {
 #ifdef WLAN_FEATURE_MBSSID
    VOS_STATUS status;
@@ -5486,7 +5322,13 @@ VOS_STATUS hdd_unregister_hostapd(hdd_adapter_t *pAdapter)
       detach the wireless device handlers */
    if (pAdapter->dev)
    {
-      pAdapter->dev->wireless_handlers = NULL;
+      if (rtnl_held)
+          pAdapter->dev->wireless_handlers = NULL;
+      else {
+          rtnl_lock();
+          pAdapter->dev->wireless_handlers = NULL;
+          rtnl_unlock();
+      }
    }
 
 #ifdef WLAN_FEATURE_MBSSID

@@ -56,6 +56,8 @@
 #endif
 #include "limSession.h"
 #define LIM_GET_NOISE_MAX_TRY 5
+
+#include "wma.h"
 /**
  * limExtractApCapability()
  *
@@ -109,7 +111,8 @@ limExtractApCapability(tpAniSirGlobal pMac, tANI_U8 *pIE, tANI_U16 ieLen,
             LIM_BSS_CAPS_SET(WME, *qosCap);
         if (LIM_BSS_CAPS_GET(WME, *qosCap) && pBeaconStruct->wsmCapablePresent)
             LIM_BSS_CAPS_SET(WSM, *qosCap);
-        if (pBeaconStruct->propIEinfo.capabilityPresent)
+        if (pBeaconStruct->propIEinfo.aniIndicator &&
+            pBeaconStruct->propIEinfo.capabilityPresent)
             *propCap = pBeaconStruct->propIEinfo.capability;
         if (pBeaconStruct->HTCaps.present)
             pMac->lim.htCapabilityPresentInBeacon = 1;
@@ -126,9 +129,29 @@ limExtractApCapability(tpAniSirGlobal pMac, tANI_U8 *pIE, tANI_U16 ieLen,
 
         if (IS_BSS_VHT_CAPABLE(pBeaconStruct->VHTCaps) && pBeaconStruct->VHTOperation.present)
         {
+            /* If VHT is supported min 80 MHz support is must */
+            uint32_t fw_vht_ch_wd = wma_get_vht_ch_width();
+            uint32_t vht_ch_wd;
+
             psessionEntry->vhtCapabilityPresentInBeacon = 1;
-            psessionEntry->apCenterChan = pBeaconStruct->VHTOperation.chanCenterFreqSeg1;
-            psessionEntry->apChanWidth = pBeaconStruct->VHTOperation.chanWidth;
+            vht_ch_wd = VOS_MIN(fw_vht_ch_wd,
+                            pBeaconStruct->VHTOperation.chanWidth);
+            /*
+             * First block covers 2 cases:
+             * 1) AP and STA both have same vht capab
+             * 2) AP is 160 (80+80), we are 160 only
+             */
+            if (vht_ch_wd == pBeaconStruct->VHTOperation.chanWidth ||
+                vht_ch_wd >= WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ ) {
+                psessionEntry->apCenterChan =
+                    pBeaconStruct->VHTOperation.chanCenterFreqSeg1;
+            } else {
+                /* This is the case when AP was 160 but we were 80 only */
+                psessionEntry->apCenterChan =
+                    lim_get_80Mhz_center_channel(pBeaconStruct->channelNumber);
+            }
+            psessionEntry->apChanWidth = vht_ch_wd;
+            psessionEntry->vhtTxChannelWidthSet = vht_ch_wd;
 
             if (pBeaconStruct->Vendor1IEPresent &&
                 pBeaconStruct->Vendor2IEPresent &&

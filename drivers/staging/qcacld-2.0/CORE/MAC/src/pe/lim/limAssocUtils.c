@@ -1110,7 +1110,6 @@ limDecideApProtectionOnDelete(tpAniSirGlobal pMac,
                                     pStaDs->staAddr, sizeof(tSirMacAddr)))
                             {
                                 psessionEntry->gLim11aParams.numSta--;
-                                psessionEntry->protStaCache[i].active = false;
                                 break;
                             }
                         }
@@ -1217,7 +1216,6 @@ limDecideApProtectionOnDelete(tpAniSirGlobal pMac,
                                 pStaDs->staAddr, sizeof(tSirMacAddr)))
                         {
                             psessionEntry->gLimNonGfParams.numSta--;
-                            psessionEntry->protStaCache[i].active = false;
                             break;
                         }
                     }
@@ -1253,7 +1251,6 @@ limDecideApProtectionOnDelete(tpAniSirGlobal pMac,
                                 pStaDs->staAddr, sizeof(tSirMacAddr)))
                         {
                             psessionEntry->gLimLsigTxopParams.numSta--;
-                            psessionEntry->protStaCache[i].active = false;
                             break;
                         }
                     }
@@ -2973,7 +2970,7 @@ limAddStaSelf(tpAniSirGlobal pMac,tANI_U16 staIdx, tANI_U8 updateSta, tpPESessio
          * TQ STA will do Greenfield only with TQ AP, for
          * everybody else it will be turned off.
         */
-        if( (psessionEntry->pLimJoinReq != NULL))
+        if( (psessionEntry->pLimJoinReq != NULL) && (!psessionEntry->pLimJoinReq->bssDescription.aniIndicator))
         {
             limLog( pMac, LOGE, FL(" Turning off Greenfield, when adding self entry"));
             pAddStaParams->greenFieldCapable = WNI_CFG_GREENFIELD_CAPABILITY_DISABLE;
@@ -4299,8 +4296,13 @@ tSirRetStatus limStaSendAddBssPreAssoc( tpAniSirGlobal pMac, tANI_U8 updateEntry
     if (psessionEntry->vhtCapability && IS_BSS_VHT_CAPABLE(pBeaconStruct->VHTCaps))
     {
         pAddBssParams->vhtCapable = pBeaconStruct->VHTCaps.present;
-        pAddBssParams->vhtTxChannelWidthSet = pBeaconStruct->VHTOperation.chanWidth;
-        pAddBssParams->currentExtChannel = limGet11ACPhyCBState ( pMac,
+        /*
+         * in limExtractApCapability function intersection of FW advertised
+         * channel width and AP advertised channel width has been taken into
+         * account for calculating psessionEntry->apChanWidth
+         */
+        pAddBssParams->vhtTxChannelWidthSet = psessionEntry->apChanWidth;
+        pAddBssParams->currentExtChannel = limGet11ACPhyCBState (pMac,
                                                                   pAddBssParams->currentOperChannel,
                                                                   pAddBssParams->currentExtChannel,
                                                                   psessionEntry->apCenterChan,
@@ -4379,8 +4381,14 @@ tSirRetStatus limStaSendAddBssPreAssoc( tpAniSirGlobal pMac, tANI_U8 updateEntry
 #ifdef WLAN_FEATURE_11AC
                 if (pAddBssParams->staContext.vhtCapable)
                 {
+                    /*
+                     * in limExtractApCapability function intersection of FW
+                     * advertised channel width and AP advertised channel width
+                     * has been taken into account for calculating
+                     * psessionEntry->apChanWidth
+                     */
                     pAddBssParams->staContext.vhtTxChannelWidthSet =
-                                     pBeaconStruct->VHTOperation.chanWidth;
+                        psessionEntry->apChanWidth;
                 }
                 limLog(pMac, LOG2,FL("StaContext vhtCapable %d "
                 "vhtTxChannelWidthSet: %d vhtTxBFCapable: %d"),
