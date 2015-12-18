@@ -126,10 +126,10 @@
 #define WMA_DEBUG_ALWAYS
 
 #ifdef WMA_DEBUG_ALWAYS
-#define WMA_LOGA(fmt, args...) \
-	printk(KERN_INFO "%s-%d: " fmt"\n", __func__, __LINE__, ## args)
+#define WMA_LOGA(args...) \
+	VOS_TRACE( VOS_MODULE_ID_WDA, VOS_TRACE_LEVEL_FATAL, ## args)
 #else
-#define WMA_LOGA(fmt, args...)
+#define WMA_LOGA(args...)
 #endif
 
 #define     ALIGNED_WORD_SIZE       4
@@ -228,7 +228,6 @@ static const t_probeTime_dwellTime
 #define WMA_MAX_EXTSCAN_MSG_SIZE        1536
 #define WMA_EXTSCAN_REST_TIME           100
 #define WMA_EXTSCAN_MAX_SCAN_TIME       50000
-#define WMA_EXTSCAN_REPEAT_PROBE        10
 #define WMA_EXTSCAN_BURST_DURATION      150
 #endif
 
@@ -553,6 +552,11 @@ struct wma_txrx_node {
 	v_BOOL_t roam_synch_in_progress;
 	void *plink_status_req;
 	u_int8_t delay_before_vdev_stop;
+#ifdef FEATURE_WLAN_EXTSCAN
+	bool extscan_in_progress;
+#endif
+	uint32_t alt_modulated_dtim;
+	bool alt_modulated_dtim_enabled;
 };
 
 #if defined(QCA_WIFI_FTM)
@@ -694,8 +698,6 @@ typedef struct {
 	v_BOOL_t ptrn_match_enable_all_vdev;
 	void* pGetRssiReq;
 	v_S7_t first_rssi;
-	bool get_sta_rssi;
-	v_MACADDR_t peer_macaddr;
 	t_thermal_mgmt thermal_mgmt_info;
         v_BOOL_t  roam_offload_enabled;
         t_wma_roam_preauth_chan_state_t roam_preauth_scan_state;
@@ -739,6 +741,10 @@ typedef struct {
 
 	u_int8_t dfs_phyerr_filter_offload;
 	v_BOOL_t suitable_ap_hb_failure;
+	/* record the RSSI when suitable_ap_hb_failure for later usage to
+	 * report RSSI at beacon miss scenario
+	 */
+	uint32_t suitable_ap_hb_failure_rssi;
 
 	/* IBSS Power Save config Parameters */
 	ibss_power_save_params wma_ibss_power_save_params;
@@ -761,6 +767,12 @@ typedef struct {
 #ifdef FEATURE_WLAN_D0WOW
 	atomic_t in_d0wow;
 #endif
+	vos_timer_t log_completion_timer;
+	uint16_t self_gen_frm_pwr;
+
+	uint32_t num_of_diag_events_logs;
+	uint32_t *events_logs_list;
+
 	uint32_t wow_pno_match_wake_up_count;
 	uint32_t wow_pno_complete_wake_up_count;
 	uint32_t wow_gscan_wake_up_count;
@@ -774,8 +786,6 @@ typedef struct {
 	uint32_t wow_ipv6_mcast_ns_stats;
 	uint32_t wow_ipv6_mcast_na_stats;
 
-	bool  tx_chain_mask_cck;
-	uint16_t self_gen_frm_pwr;
 	uint32_t wow_wakeup_enable_mask;
 	uint32_t wow_wakeup_disable_mask;
 }t_wma_handle, *tp_wma_handle;
@@ -1165,6 +1175,7 @@ u_int16_t get_regdmn_5g(u_int32_t reg_dmn);
 #define WMA_FW_TX_CONCISE_STATS 0x5
 #define WMA_FW_TX_RC_STATS	0x6
 #define WMA_FW_RX_REM_RING_BUF 0xc
+#define WMA_FW_RX_TXBF_MUSU_NDPA 0xf
 
 /*
  * Setting the Tx Comp Timeout to 1 secs.
@@ -1297,6 +1308,7 @@ VOS_STATUS wma_send_snr_request(tp_wma_handle wma_handle, void *pGetRssiReq,
 
 #define WMA_NLO_FREQ_THRESH          1000         /* in MHz */
 #define WMA_SEC_TO_MSEC(sec)         (sec * 1000) /* sec to msec */
+#define WMA_MSEC_TO_USEC(msec)       (msec * 1000) /* msec to usec */
 
 /* Default rssi threshold defined in CFG80211 */
 #define WMA_RSSI_THOLD_DEFAULT   -300
@@ -1312,6 +1324,7 @@ VOS_STATUS wma_send_snr_request(tp_wma_handle wma_handle, void *pGetRssiReq,
 #ifdef FEATURE_WLAN_AUTO_SHUTDOWN
 #define WMA_AUTO_SHUTDOWN_WAKE_LOCK_DURATION    (5 * 1000) /* in msec */
 #endif
+#define WMA_BMISS_EVENT_WAKE_LOCK_DURATION      (4 * 1000) /* in msec */
 
 /* U-APSD maximum service period of peer station */
 enum uapsd_peer_param_max_sp {
@@ -1575,7 +1588,6 @@ A_UINT32 eCsrAuthType_to_rsn_authmode (eCsrAuthType authtype,
 A_UINT32 eCsrEncryptionType_to_rsn_cipherset (eCsrEncryptionType encr);
 
 #define WMA_TGT_INVALID_SNR (-1)
-#define WMA_DYNAMIC_DTIM_SETTING_THRESHOLD 2
 
 #define WMA_TX_Q_RECHECK_TIMER_WAIT      2    // 2 ms
 #define WMA_TX_Q_RECHECK_TIMER_MAX_WAIT  20   // 20 ms
@@ -1595,6 +1607,19 @@ typedef struct wma_roam_invoke_cmd
     v_U32_t channel;
 }t_wma_roam_invoke_cmd;
 
+#ifdef REMOVE_PKT_LOG
+static inline void wma_set_wifi_start_packet_stats(void *wma_handle,
+					struct sir_wifi_start_log *start_log)
+{
+	return;
+}
+#endif
+
+void wma_send_flush_logs_to_fw(tp_wma_handle wma_handle);
+
 int wma_crash_inject(tp_wma_handle wma_handle, uint32_t type,
 			uint32_t delay_time_ms);
+
+uint32_t wma_get_vht_ch_width(void);
+
 #endif

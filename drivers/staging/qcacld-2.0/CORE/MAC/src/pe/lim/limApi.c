@@ -823,6 +823,9 @@ tSirRetStatus peOpen(tpAniSirGlobal pMac, tMacOpenParameters *pMacOpenParam)
 {
     tSirRetStatus status = eSIR_SUCCESS;
 
+    if (eDRIVER_TYPE_MFG == pMacOpenParam->driverType)
+       return eSIR_SUCCESS;
+
     pMac->lim.maxBssId = pMacOpenParam->maxBssId;
     pMac->lim.maxStation = pMacOpenParam->maxStation;
 
@@ -1056,6 +1059,7 @@ tANI_U8 limIsTimerAllowedInPowerSaveState(tpAniSirGlobal pMac, tSirMsgQ *pMsg)
             case SIR_LIM_ASSOC_FAIL_TIMEOUT:
             case SIR_LIM_AUTH_FAIL_TIMEOUT:
             case SIR_LIM_ADDTS_RSP_TIMEOUT:
+            case SIR_LIM_AUTH_RETRY_TIMEOUT:
                 retStatus = TRUE;
                 break;
 
@@ -1611,6 +1615,68 @@ limHandleIBSScoalescing(
     return retCode;
 } /*** end limHandleIBSScoalescing() ***/
 
+/**
+ * lim_enc_type_matched() - matches security type of incoming beracon with
+ * current
+ * @mac_ctx      Pointer to Global MAC structure
+ * @bcn          Pointer to parsed Beacon structure
+ * @session     PE session entry
+ *
+ * This function matches security type of incoming beracon with current
+ *
+ * @return true if matched, false otherwise
+ */
+static bool
+lim_enc_type_matched(tpAniSirGlobal mac_ctx,
+                  tpSchBeaconStruct bcn,
+                  tpPESession session)
+{
+    if (!bcn || !session)
+        return false;
+
+    limLog(mac_ctx, LOG1,
+           FL("Beacon/Probe:: Privacy :%d WPA Present:%d RSN Present: %d"),
+           bcn->capabilityInfo.privacy, bcn->wpaPresent,
+           bcn->rsnPresent);
+    limLog(mac_ctx, LOG1,
+           FL("session:: Privacy :%d EncyptionType: %d"),
+           SIR_MAC_GET_PRIVACY(session->limCurrentBssCaps),
+           session->encryptType);
+
+    /* This is handled by sending probe req due to IOT issues so return TRUE */
+    if ((bcn->capabilityInfo.privacy) !=
+            SIR_MAC_GET_PRIVACY(session->limCurrentBssCaps)) {
+        limLog(mac_ctx, LOGW, FL("Privacy bit miss match\n"));
+        return true;
+    }
+
+    /* Open */
+    if ((bcn->capabilityInfo.privacy == 0)
+           && (session->encryptType == eSIR_ED_NONE))
+        return true;
+
+    /* WEP */
+    if ((bcn->capabilityInfo.privacy == 1)
+           && (bcn->wpaPresent == 0)
+           && (bcn->rsnPresent == 0)
+           && ((session->encryptType == eSIR_ED_WEP40)
+                  || (session->encryptType == eSIR_ED_WEP104)
+#ifdef FEATURE_WLAN_WAPI
+                  || (session->encryptType == eSIR_ED_WPI)
+#endif
+           ))
+        return true;
+
+    /* WPA OR RSN*/
+    if ((bcn->capabilityInfo.privacy == 1)
+            && ((bcn->wpaPresent == 1) || (bcn->rsnPresent == 1))
+            && ((session->encryptType == eSIR_ED_TKIP)
+                    || (session->encryptType == eSIR_ED_CCMP)
+                    || (session->encryptType == eSIR_ED_AES_128_CMAC)))
+        return true;
+
+    return false;
+}
 
 /**
  * limDetectChangeInApCapabilities()
@@ -1643,10 +1709,12 @@ limDetectChangeInApCapabilities(tpAniSirGlobal pMac,
     tANI_U8                 len;
     tSirSmeApNewCaps   apNewCaps;
     tANI_U8            newChannel;
+    bool security_caps_matched = true;
     tSirRetStatus status = eSIR_SUCCESS;
     apNewCaps.capabilityInfo = limGetU16((tANI_U8 *) &pBeacon->capabilityInfo);
     newChannel = (tANI_U8) pBeacon->channelNumber;
 
+    security_caps_matched = lim_enc_type_matched(pMac, pBeacon, psessionEntry);
     if ( ( false == psessionEntry->limSentCapsChangeNtf ) &&
         ( ( ( !limIsNullSsid(&pBeacon->ssId) ) &&
              ( false == limCmpSSid(pMac, &pBeacon->ssId, psessionEntry) ) ) ||
@@ -1659,10 +1727,14 @@ limDetectChangeInApCapabilities(tpAniSirGlobal pMac,
           ( SIR_MAC_GET_QOS(apNewCaps.capabilityInfo) !=
             SIR_MAC_GET_QOS(psessionEntry->limCurrentBssCaps) ) ||
           ( (newChannel !=  psessionEntry->currentOperChannel) &&
-            (newChannel != 0) )
+            (newChannel != 0) ) ||
+          (eSIR_FALSE == security_caps_matched)
           ) ) )
     {
-        if( false == psessionEntry->fWaitForProbeRsp )
+      /* No need to send probe request if security
+               * capability doesnt match, Disconnect directly.*/
+        if((false == psessionEntry->fWaitForProbeRsp)
+           && (eSIR_TRUE == security_caps_matched))
         {
             /* If Beacon capabilities is not matching with the current capability,
              * then send unicast probe request to AP and take decision after
@@ -2035,13 +2107,22 @@ eHalStatus limRoamFillBssDescr(tpAniSirGlobal pMac,
      return eHAL_STATUS_RESOURCES;
    }
      vos_mem_zero(pBssDescr, sizeof(tSirBssDescription));
-   /* Length of BSS desription is without length of
-    * length itself and length of pointer
-    * that holds the next BSS description
-    */
-   pBssDescr->length = (tANI_U16)(
-                       sizeof(tSirBssDescription) - sizeof(tANI_U16) -
-                       sizeof(tANI_U32) + uLen);
+
+    /**
+     * Length of BSS desription is without length of
+     * length itself and length of pointer
+     * that holds ieFields
+     *
+     * tSirBssDescription
+     * +--------+---------------------------------+---------------+
+     * | length | other fields                    | pointer to IEs|
+     * +--------+---------------------------------+---------------+
+     *                                            ^
+     *                                            ieFields
+     */
+    pBssDescr->length = (tANI_U16)(offsetof(tSirBssDescription, ieFields[0]) -
+                                   sizeof(pBssDescr->length) + uLen);
+
    if (pParsedFrame->dsParamsPresent)
    {
      pBssDescr->channelId = pParsedFrame->channelNumber;
@@ -2396,6 +2477,49 @@ tMgmtFrmDropReason limIsPktCandidateForDrop(tpAniSirGlobal pMac, tANI_U8 *pRxPac
     }
 
     return eMGMT_DROP_NO_DROP;
+}
+
+/**
+ * lim_update_lost_link_info() - update lost link information to SME
+ * @mac: global MAC handle
+ * @session: PE session
+ * @rssi: rssi value from the received frame
+ *
+ * Return: none
+ */
+void lim_update_lost_link_info(tpAniSirGlobal mac, tpPESession session,
+                               int8_t rssi)
+{
+	struct sir_lost_link_info *lost_link_info;
+	tSirMsgQ mmh_msg;
+	if ((NULL == mac) || (NULL == session)) {
+		VOS_TRACE(VOS_MODULE_ID_PE, VOS_TRACE_LEVEL_ERROR,
+			  "%s: parameter NULL", __func__);
+		return;
+	}
+	if (!LIM_IS_STA_ROLE(session)) {
+		VOS_TRACE(VOS_MODULE_ID_PE, VOS_TRACE_LEVEL_ERROR,
+			  "%s: not STA mode, do nothing", __func__);
+		return;
+	}
+
+	lost_link_info = vos_mem_malloc(sizeof(*lost_link_info));
+	if (NULL == lost_link_info) {
+		VOS_TRACE(VOS_MODULE_ID_PE, VOS_TRACE_LEVEL_ERROR,
+			  "%s: lost_link_info allocation failure", __func__);
+		return;
+	}
+
+	lost_link_info->vdev_id = session->smeSessionId;
+	lost_link_info->rssi = rssi;
+	mmh_msg.type = eWNI_SME_LOST_LINK_INFO_IND;
+	mmh_msg.bodyptr = lost_link_info;
+	mmh_msg.bodyval = 0;
+	VOS_TRACE(VOS_MODULE_ID_PE, VOS_TRACE_LEVEL_INFO,
+		  "%s: post eWNI_SME_LOST_LINK_INFO_IND, bss_idx %d, rssi %d",
+		  __func__, lost_link_info->vdev_id, lost_link_info->rssi);
+
+	limSysProcessMmhMsgApi(mac, &mmh_msg, ePROT);
 }
 
 eHalStatus pe_AcquireGlobalLock( tAniSirLim *psPe)
