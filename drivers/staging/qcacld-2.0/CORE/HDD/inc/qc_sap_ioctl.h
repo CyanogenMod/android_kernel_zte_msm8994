@@ -178,9 +178,6 @@ typedef struct
 #endif
 
 #define MAX_VAR_ARGS         7
-
-#define QCSAP_IOCTL_PRIV_GET_RSSI       (SIOCIWFIRSTPRIV + 29)
-
 #define QCSAP_IOCTL_PRIV_GET_SOFTAP_LINK_SPEED (SIOCIWFIRSTPRIV + 31)
 
 #define QCSAP_IOCTL_MAX_STR_LEN 1024
@@ -243,6 +240,9 @@ enum {
     QCASAP_NSS_CMD,
     QCSAP_IPA_UC_STAT,
     QCASAP_SET_PHYMODE,
+    QCASAP_PARAM_LDPC,
+    QCASAP_PARAM_TX_STBC,
+    QCASAP_PARAM_RX_STBC,
 };
 
 int iw_softap_get_channel_list(struct net_device *dev,

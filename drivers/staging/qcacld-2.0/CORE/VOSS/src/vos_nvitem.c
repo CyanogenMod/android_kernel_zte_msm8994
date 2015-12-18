@@ -70,10 +70,6 @@ static v_BOOL_t init_by_reg_core = VOS_FALSE;
  * -------------------------------------------------------------------------*/
 #define MAX_COUNTRY_COUNT        300
 #define REG_WAIT_TIME            50
-#define WORLD_SKU_MASK          0x00F0
-#define WORLD_SKU_PREFIX        0x0060
-
-
 /*
  * This is a set of common rules used by our world regulatory domains.
  * We have 12 world regulatory domains. To save space we consolidate
@@ -112,6 +108,9 @@ static v_BOOL_t init_by_reg_core = VOS_FALSE;
 
 #define REG_RULE_5GHZ_NO_MIDBAND   REG_RULE_5180_5320,\
         REG_RULE_5745_5925
+
+#define WORLD_SKU_MASK          0x00F0
+#define WORLD_SKU_PREFIX        0x0060
 
 static const struct ieee80211_regdomain vos_world_regdom_60_61_62 = {
    .n_reg_rules = 6,
@@ -493,196 +492,6 @@ struct ieee80211_regdomain *vos_world_regdomain(struct regulatory *reg)
 }
 
 
-/* Frequency is one where radar detection is required */
-static bool vos_is_radar_freq(u16 center_freq)
-{
-   return (center_freq >= 5260 && center_freq <= 5700);
-}
-
-/*
- * N.B: These exception rules do not apply radar freqs.
- *
- * - We enable adhoc (or beaconing) if allowed by 11d
- * - We enable active scan if the channel is allowed by 11d
- * - If no country IE has been processed and a we determine we have
- *   received a beacon on a channel we can enable active scan and
- *   adhoc (or beaconing).
- */
-static void
-vos_reg_apply_beaconing_flags(struct wiphy *wiphy,
-      enum nl80211_reg_initiator initiator)
-{
-   enum ieee80211_band band;
-   struct ieee80211_supported_band *sband;
-   const struct ieee80211_reg_rule *reg_rule;
-   struct ieee80211_channel *ch;
-   unsigned int i;
-
-   for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
-
-      if (!wiphy->bands[band])
-         continue;
-
-      sband = wiphy->bands[band];
-
-      for (i = 0; i < sband->n_channels; i++) {
-
-         ch = &sband->channels[i];
-
-         if (vos_is_radar_freq(ch->center_freq) ||
-               (ch->flags & IEEE80211_CHAN_RADAR))
-            continue;
-
-         if (initiator == NL80211_REGDOM_SET_BY_COUNTRY_IE) {
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0))
-            freq_reg_info(wiphy, MHZ_TO_KHZ(ch->center_freq),
-                        0, &reg_rule);
-#else
-            reg_rule = freq_reg_info(wiphy, MHZ_TO_KHZ(ch->center_freq));
-#endif
-            if (IS_ERR(reg_rule))
-               continue;
-            /*
-             * If 11d had a rule for this channel ensure
-             * we enable adhoc/beaconing if it allows us to
-             * use it. Note that we would have disabled it
-             * by applying our static world regdomain by
-             * default during init, prior to calling our
-             * regulatory_hint().
-             */
-            if (!(reg_rule->flags &
-                     NL80211_RRF_NO_IBSS))
-               ch->flags &=
-                  ~IEEE80211_CHAN_NO_IBSS;
-            if (!(reg_rule->flags &
-                     NL80211_RRF_PASSIVE_SCAN))
-               ch->flags &=
-                  ~IEEE80211_CHAN_PASSIVE_SCAN;
-         } else {
-            if (ch->beacon_found)
-               ch->flags &= ~(IEEE80211_CHAN_NO_IBSS |
-                     IEEE80211_CHAN_PASSIVE_SCAN);
-         }
-      }
-   }
-}
-
-/* Allows active scan scan on Ch 12 and 13 */
-static void
-vos_reg_apply_active_scan_flags(struct wiphy *wiphy,
-      enum nl80211_reg_initiator initiator)
-{
-   struct ieee80211_supported_band *sband;
-   struct ieee80211_channel *ch;
-   const struct ieee80211_reg_rule *reg_rule;
-
-   sband = wiphy->bands[IEEE80211_BAND_2GHZ];
-   if (!sband)
-      return;
-
-   /*
-    * If no country IE has been received always enable active scan
-    * on these channels. This is only done for specific regulatory SKUs
-    */
-   if (initiator != NL80211_REGDOM_SET_BY_COUNTRY_IE) {
-      ch = &sband->channels[11]; /* CH 12 */
-      if (ch->flags & IEEE80211_CHAN_PASSIVE_SCAN)
-         ch->flags &= ~IEEE80211_CHAN_PASSIVE_SCAN;
-      ch = &sband->channels[12]; /* CH 13 */
-      if (ch->flags & IEEE80211_CHAN_PASSIVE_SCAN)
-         ch->flags &= ~IEEE80211_CHAN_PASSIVE_SCAN;
-      return;
-   }
-
-   /*
-    * If a country IE has been received check its rule for this
-    * channel first before enabling active scan. The passive scan
-    * would have been enforced by the initial processing of our
-    * custom regulatory domain.
-    */
-
-   ch = &sband->channels[11]; /* CH 12 */
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0))
-            freq_reg_info(wiphy, MHZ_TO_KHZ(ch->center_freq),
-                        0, &reg_rule);
-#else
-   reg_rule = freq_reg_info(wiphy, MHZ_TO_KHZ(ch->center_freq));
-#endif
-
-   if (!IS_ERR(reg_rule)) {
-      if (!(reg_rule->flags & NL80211_RRF_PASSIVE_SCAN))
-         if (ch->flags & IEEE80211_CHAN_PASSIVE_SCAN)
-            ch->flags &= ~IEEE80211_CHAN_PASSIVE_SCAN;
-   }
-
-   ch = &sband->channels[12]; /* CH 13 */
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0))
-            freq_reg_info(wiphy, MHZ_TO_KHZ(ch->center_freq),
-                        0, &reg_rule);
-#else
-   reg_rule = freq_reg_info(wiphy, MHZ_TO_KHZ(ch->center_freq));
-#endif
-   if (!IS_ERR(reg_rule)) {
-      if (!(reg_rule->flags & NL80211_RRF_PASSIVE_SCAN))
-         if (ch->flags & IEEE80211_CHAN_PASSIVE_SCAN)
-            ch->flags &= ~IEEE80211_CHAN_PASSIVE_SCAN;
-   }
-}
-
-/* Always apply Radar/DFS rules on freq range 5260 MHz - 5700 MHz */
-static void vos_reg_apply_radar_flags(struct wiphy *wiphy)
-{
-   struct ieee80211_supported_band *sband;
-   struct ieee80211_channel *ch;
-   unsigned int i;
-
-   if (!wiphy->bands[IEEE80211_BAND_5GHZ])
-      return;
-
-   sband = wiphy->bands[IEEE80211_BAND_5GHZ];
-
-   for (i = 0; i < sband->n_channels; i++) {
-      ch = &sband->channels[i];
-      if (!vos_is_radar_freq(ch->center_freq))
-         continue;
-      /* We always enable radar detection/DFS on this
-       * frequency range. Additionally we also apply on
-       * this frequency range:
-       * - If STA mode does not yet have DFS supports disable
-       * active scanning
-       * - If adhoc mode does not support DFS yet then
-       *   disable adhoc in the frequency.
-       * - If AP mode does not yet support radar detection/DFS
-       *   do not allow AP mode
-       */
-      if (!(ch->flags & IEEE80211_CHAN_DISABLED))
-         ch->flags |= IEEE80211_CHAN_RADAR |
-            IEEE80211_CHAN_NO_IBSS |
-            IEEE80211_CHAN_PASSIVE_SCAN;
-   }
-}
-
-static void vos_reg_apply_world_flags(struct wiphy *wiphy,
-      enum nl80211_reg_initiator initiator,
-      struct regulatory *reg)
-{
-   REG_DMN_PAIR_MAPPING *regpair;
-   regpair = (REG_DMN_PAIR_MAPPING *)reg->regpair;
-   switch (regpair->regDmnEnum) {
-      case 0x60:
-      case 0x63:
-      case 0x66:
-      case 0x67:
-      case 0x6C:
-         vos_reg_apply_beaconing_flags(wiphy, initiator);
-         break;
-      case 0x68:
-         vos_reg_apply_beaconing_flags(wiphy, initiator);
-         vos_reg_apply_active_scan_flags(wiphy, initiator);
-         break;
-   }
-}
-
 static int regd_init_wiphy(hdd_context_t *pHddCtx, struct regulatory *reg,
       struct wiphy *wiphy)
 {
@@ -692,18 +501,19 @@ static int regd_init_wiphy(hdd_context_t *pHddCtx, struct regulatory *reg,
    {
        regd = vos_world_regdomain(reg);
        wiphy->flags |= WIPHY_FLAG_CUSTOM_REGULATORY;
-   } else if (pHddCtx->cfg_ini->fRegChangeDefCountry) {
-
+   }
+   else if  (pHddCtx->cfg_ini->fRegChangeDefCountry) {
        regd = vos_custom_world_regdomain();
        wiphy->flags |= WIPHY_FLAG_CUSTOM_REGULATORY;
-   } else {
+   }
+
+   else
+   {
        regd = vos_default_world_regdomain();
        wiphy->flags |= WIPHY_FLAG_STRICT_REGULATORY;
    }
 
    wiphy_apply_custom_regulatory(wiphy, regd);
-   vos_reg_apply_radar_flags(wiphy);
-   vos_reg_apply_world_flags(wiphy, NL80211_REGDOM_SET_BY_DRIVER, reg);
    return 0;
 }
 
@@ -1197,8 +1007,8 @@ VOS_STATUS vos_nv_getRegDomainFromCountryCode( v_REGDOMAIN_t *pRegDomain,
 
 /* create_linux_regulatory_entry to populate internal structures from wiphy */
 static int create_linux_regulatory_entry(struct wiphy *wiphy,
-                                         v_U8_t nBandCapability,
-                                         bool reset)
+					 v_U8_t nBandCapability,
+					 bool reset)
 {
     int i, j, m;
     int k = 0, n = 0;
@@ -1275,28 +1085,43 @@ static int create_linux_regulatory_entry(struct wiphy *wiphy,
              * require a passive scan on a frequency, lift the passive
              * scan restriction
              */
-            if ((!reset) &&
-                (wiphy->flags & WIPHY_FLAG_CUSTOM_REGULATORY)) {
-                reg_rule = freq_reg_info(wiphy,
-                                         MHZ_TO_KHZ(wiphy->bands[i]->channels[j].center_freq));
+	    if ((!reset) &&
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)) || defined(WITH_BACKPORTS)
+                (wiphy->regulatory_flags & REGULATORY_CUSTOM_REG)) {
+#else
+	        (wiphy->flags & WIPHY_FLAG_CUSTOM_REGULATORY)) {
+#endif
 
-                if (!IS_ERR(reg_rule))
-                {
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,9,0))
+	      reg_rule = freq_reg_info(wiphy,
+				       MHZ_TO_KHZ(wiphy->bands[i]->channels[j].center_freq));
+#else
+	      err = freq_reg_info(wiphy,
+				  MHZ_TO_KHZ(wiphy->bands[i]->channels[j].center_freq),
+				  0, &reg_rule);
+#endif
 
-                    wiphy->bands[i]->channels[j].flags &= ~IEEE80211_CHAN_DISABLED;
-                    if (!(reg_rule->flags & NL80211_RRF_DFS))
-                    {
-                        VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,9,0))
+	      if (!IS_ERR(reg_rule)) {
+#else
+	      if (0 == err) {
+#endif
+
+		wiphy->bands[i]->channels[j].flags &= ~IEEE80211_CHAN_DISABLED;
+
+		if (!(reg_rule->flags & NL80211_RRF_DFS)) {
+
+		  VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
+			    "%s: Remove passive scan restriction for %u",
+			    __func__, wiphy->bands[i]->channels[j].center_freq);
+		  wiphy->bands[i]->channels[j].flags &= ~IEEE80211_CHAN_RADAR;
+		}
+
+		if (!(reg_rule->flags & NL80211_RRF_PASSIVE_SCAN))
+		  {
+		    VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
                                   "%s: Remove passive scan restriction for %u",
                                   __func__, wiphy->bands[i]->channels[j].center_freq);
-                          wiphy->bands[i]->channels[j].flags &= ~IEEE80211_CHAN_RADAR;
-                      }
-
-                    if (!(reg_rule->flags & NL80211_RRF_PASSIVE_SCAN))
-                    {
-                        VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
-                                  "%s: Remove passive scan restriction for %u",
-                                      __func__, wiphy->bands[i]->channels[j].center_freq);
                         wiphy->bands[i]->channels[j].flags &= ~IEEE80211_CHAN_PASSIVE_SCAN;
                     }
 
@@ -1332,6 +1157,12 @@ static int create_linux_regulatory_entry(struct wiphy *wiphy,
                      (IEEE80211_CHAN_RADAR | IEEE80211_CHAN_PASSIVE_SCAN |
                       IEEE80211_CHAN_INDOOR_ONLY))
             {
+
+                if (wiphy->bands[i]->channels[j].flags &
+                    IEEE80211_CHAN_INDOOR_ONLY)
+                    wiphy->bands[i]->channels[j].flags |=
+                        IEEE80211_CHAN_PASSIVE_SCAN;
+
                 pnvEFSTable->halnv.tables.regDomains[temp_reg_domain].channels[k].enabled =
                     NV_CHANNEL_DFS;
 
@@ -1429,34 +1260,34 @@ static int create_linux_regulatory_entry(struct wiphy *wiphy,
     return 0;
 }
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0)) && !defined(WITH_BACKPORTS)
 /* restore_custom_reg_settings() - restore custom reg settings
  *
  * @wiphy: wiphy structure
  *
  * Return: void
-*/
+ */
 static void restore_custom_reg_settings(struct wiphy *wiphy)
 {
-    struct ieee80211_supported_band *sband;
-    enum ieee80211_band band;
-    struct ieee80211_channel *chan;
-    int i;
 
-    for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
-        sband = wiphy->bands[band];
+	struct ieee80211_supported_band *sband;
+	enum ieee80211_band band;
+	struct ieee80211_channel *chan;
+	int i;
 
-        if (!sband)
-            continue;
-
-        for (i = 0; i < sband->n_channels; i++) {
-            chan = &sband->channels[i];
-            chan->flags = chan->orig_flags;
-            chan->max_antenna_gain = chan->orig_mag;
-            chan->max_power = chan->orig_mpwr;
-        }
-    }
+	for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
+		sband = wiphy->bands[band];
+		if (!sband)
+			continue;
+		for (i = 0; i < sband->n_channels; i++) {
+			chan = &sband->channels[i];
+			chan->flags = chan->orig_flags;
+			chan->max_antenna_gain = chan->orig_mag;
+			chan->max_power = chan->orig_mpwr;
+		}
+	}
 }
-
+#endif
 
 /*
  * Function: wlan_hdd_linux_reg_notifier
@@ -1528,8 +1359,7 @@ int wlan_hdd_linux_reg_notifier(struct wiphy *wiphy,
         if ( VOS_TRUE == init_by_driver)
         {
             isVHT80Allowed = pHddCtx->isVHT80Allowed;
-            if (create_linux_regulatory_entry(wiphy,
-					      nBandCapability,
+            if (create_linux_regulatory_entry(wiphy, nBandCapability,
 					      reset) == 0)
             {
                 VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
@@ -1555,25 +1385,23 @@ int wlan_hdd_linux_reg_notifier(struct wiphy *wiphy,
         pHddCtx->reg.alpha2[0] = request->alpha2[0];
         pHddCtx->reg.alpha2[1] = request->alpha2[1];
 
-        if (NL80211_REGDOM_SET_BY_CORE == request->initiator){
+        if (NL80211_REGDOM_SET_BY_CORE == request->initiator) {
             pHddCtx->reg.cc_src = COUNTRY_CODE_SET_BY_CORE;
-            if (wiphy->flags & WIPHY_FLAG_CUSTOM_REGULATORY)
-                reset = true;
-        } else if (NL80211_REGDOM_SET_BY_DRIVER == request->initiator)
+	    if (wiphy->flags & WIPHY_FLAG_CUSTOM_REGULATORY)
+	      reset = true;
+	} else if (NL80211_REGDOM_SET_BY_DRIVER == request->initiator)
             pHddCtx->reg.cc_src = COUNTRY_CODE_SET_BY_DRIVER;
         else {
-            pHddCtx->reg.cc_src = COUNTRY_CODE_SET_BY_USER;
-            if ((request->alpha2[0] == '0') &&
-                (request->alpha2[1] == '0') &&
-                (wiphy->flags & WIPHY_FLAG_CUSTOM_REGULATORY))
-            {
-                restore_custom_reg_settings(wiphy);
-                reset = true;
-            }
-        }
+	  pHddCtx->reg.cc_src = COUNTRY_CODE_SET_BY_USER;
+	  if ((request->alpha2[0] == '0') &&
+	      (request->alpha2[1] == '0') &&
+	      (wiphy->flags & WIPHY_FLAG_CUSTOM_REGULATORY)) {
+	    restore_custom_reg_settings(wiphy);
+	    reset = true;
+	  }
+	}
 
         vos_update_reg_info(pHddCtx);
-        vos_reg_apply_world_flags(wiphy, request->initiator, &pHddCtx->reg);
 
         temp_reg_domain = REGDOMAIN_COUNT;
         for (i = 0; i < countryInfoTable.countryCount &&
@@ -1595,7 +1423,7 @@ int wlan_hdd_linux_reg_notifier(struct wiphy *wiphy,
         isVHT80Allowed = pHddCtx->isVHT80Allowed;
         if (create_linux_regulatory_entry(wiphy,
                                           nBandCapability,
-                                          reset) == 0)
+					  reset) == 0)
         {
             VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
                       (" regulatory entry created"));
@@ -1696,8 +1524,8 @@ VOS_STATUS vos_init_wiphy_from_eeprom(void)
    if (is_world_regd(pHddCtx->reg.reg_domain)) {
       temp_reg_domain = REGDOMAIN_WORLD;
       if (create_linux_regulatory_entry(wiphy,
-                                        pHddCtx->cfg_ini->nBandCapability,
-                                        true) != 0) {
+					pHddCtx->cfg_ini->nBandCapability,
+					true) != 0) {
          VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_ERROR,
                ("Error while creating regulatory entry"));
          return VOS_STATUS_E_FAULT;

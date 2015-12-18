@@ -1415,6 +1415,9 @@ htt_rx_amsdu_rx_in_order_pop_ll(
             }
         }
 
+        /* Update checksum result */
+        htt_set_checksum_result_ll(pdev, msdu, rx_desc);
+
         /* check if this is the last msdu */
         if (msdu_count) {
             msg_word += HTT_RX_IN_ORD_PADDR_IND_MSDU_DWORDS;
@@ -2295,6 +2298,8 @@ htt_rx_hash_list_lookup(struct htt_pdev_t *pdev, u_int32_t paddr)
                 index = NBUF_MAP_ID(netbuf);
                 if (index < HTT_RX_RING_BUFF_DBG_LIST) {
                     pdev->rx_buff_list[index].in_use = false;
+                    pdev->rx_buff_list[index].paddr = 0;
+                    pdev->rx_buff_list[index].vaddr = NULL;
                 }
             }
 #endif
@@ -2394,6 +2399,13 @@ htt_rx_hash_deinit(struct htt_pdev_t *pdev)
                  (struct htt_rx_hash_entry *)((char *)list_iter -
                                                pdev->rx_ring.listnode_offset);
             if (hash_entry->netbuf) {
+#ifdef DEBUG_DMA_DONE
+                adf_nbuf_unmap(pdev->osdev, hash_entry->netbuf,
+                                ADF_OS_DMA_BIDIRECTIONAL);
+#else
+                adf_nbuf_unmap(pdev->osdev, hash_entry->netbuf,
+                                ADF_OS_DMA_FROM_DEVICE);
+#endif
                 adf_nbuf_free(hash_entry->netbuf);
                 hash_entry->paddr = 0;
             }
