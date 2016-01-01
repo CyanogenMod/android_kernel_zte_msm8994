@@ -1249,6 +1249,24 @@ int msm_vidc_dqevent(void *inst, struct v4l2_event *event)
 }
 EXPORT_SYMBOL(msm_vidc_dqevent);
 
+static bool msm_vidc_check_for_inst_overload(struct msm_vidc_core *core)
+{
+	u32 instance_count = 0;
+	struct msm_vidc_inst *inst = NULL;
+	bool overload = false;
+
+	mutex_lock(&core->lock);
+	list_for_each_entry(inst, &core->instances, list)
+		instance_count++;
+	mutex_unlock(&core->lock);
+
+	/* Instance count includes just opened instance as well. */
+
+	if (instance_count > core->max_supported_instances)
+		overload = true;
+	return overload;
+}
+
 void *msm_vidc_open(int core_id, int session_type)
 {
 	struct msm_vidc_inst *inst = NULL;
@@ -1332,12 +1350,19 @@ void *msm_vidc_open(int core_id, int session_type)
 	list_add_tail(&inst->list, &core->instances);
 	mutex_unlock(&core->lock);
 
-	rc = msm_comm_try_state(inst, MSM_VIDC_CORE_INIT);
+	rc = msm_comm_try_state(inst, MSM_VIDC_CORE_INIT_DONE);
 	if (rc) {
 		dprintk(VIDC_ERR,
 			"Failed to move video instance to init state\n");
 		goto fail_init;
 	}
+
+	if (msm_vidc_check_for_inst_overload(core)) {
+		dprintk(VIDC_ERR,
+			"Instance count reached Max limit, rejecting session");
+		goto fail_init;
+	}
+
 	inst->debugfs_root =
 		msm_vidc_debugfs_init_inst(inst, core->debugfs_root);
 
@@ -1418,9 +1443,6 @@ int msm_vidc_close(void *instance)
 	if (!inst || !inst->core)
 		return -EINVAL;
 
-	v4l2_fh_del(&inst->event_handler);
-	v4l2_fh_exit(&inst->event_handler);
-
 	mutex_lock(&inst->registeredbufs.lock);
 	list_for_each_entry_safe(bi, dummy, &inst->registeredbufs.list, list) {
 		if (bi->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
@@ -1463,6 +1485,9 @@ int msm_vidc_close(void *instance)
 			"Failed to move video instance to uninit state\n");
 
 	msm_comm_session_clean(inst);
+
+	v4l2_fh_del(&inst->event_handler);
+	v4l2_fh_exit(&inst->event_handler);
 
 	msm_smem_delete_client(inst->mem_client);
 

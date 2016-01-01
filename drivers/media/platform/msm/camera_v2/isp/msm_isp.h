@@ -58,6 +58,21 @@
 
 #define MAX_VFE 2
 
+#define RETURN_IF_DUAL_RES_NULL(dual_vfe_res)	\
+if (!dual_vfe_res->vfe_base[ISP_VFE0] ||	\
+	!dual_vfe_res->axi_data[ISP_VFE0] ||	\
+	!dual_vfe_res->vfe_base[ISP_VFE1] ||	\
+	!dual_vfe_res->axi_data[ISP_VFE1]) {	\
+	pr_err("%s:%d failed vfe0 %p %p vfe %p %p\n",	\
+		__func__, __LINE__,	\
+		dual_vfe_res->vfe_base[ISP_VFE0],	\
+		dual_vfe_res->axi_data[ISP_VFE0],	\
+		dual_vfe_res->vfe_base[ISP_VFE1],	\
+		dual_vfe_res->axi_data[ISP_VFE1]);	\
+		return -1; \
+} 	\
+
+
 struct vfe_device;
 struct msm_vfe_axi_stream;
 struct msm_vfe_stats_stream;
@@ -121,7 +136,7 @@ struct msm_vfe_irq_ops {
 struct msm_vfe_axi_ops {
 	void (*reload_wm)(struct vfe_device *vfe_dev, void __iomem *vfe_base,
 		uint32_t reload_mask);
-	void (*enable_wm) (struct vfe_device *vfe_dev,
+	void (*enable_wm) (void __iomem *vfe_base,
 		uint8_t wm_idx, uint8_t enable);
 	int32_t (*cfg_io_format) (struct vfe_device *vfe_dev,
 		enum msm_vfe_axi_stream_src stream_src,
@@ -489,7 +504,7 @@ struct msm_vfe_error_info {
 	uint32_t error_mask1;
 	uint32_t violation_status;
 	uint32_t camif_status;
-	uint8_t stream_framedrop_count[MAX_NUM_STREAM];
+	uint8_t stream_framedrop_count[VFE_AXI_SRC_MAX];
 	uint8_t stats_framedrop_count[MSM_ISP_STATS_MAX];
 	uint32_t info_dump_frame_count;
 	uint32_t error_count;
