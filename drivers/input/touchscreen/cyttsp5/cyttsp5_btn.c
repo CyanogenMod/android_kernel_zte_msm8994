@@ -33,6 +33,10 @@ static inline void cyttsp5_btn_key_action(struct cyttsp5_btn_data *bd,
 			si->btn[btn_no].state == btn_state)
 		return;
 
+	if (!si->keypad_enable) {
+		return;
+	}
+
 	si->btn[btn_no].state = btn_state;
 	input_report_key(bd->input, si->btn[btn_no].key_code, btn_state);
 	input_sync(bd->input);
