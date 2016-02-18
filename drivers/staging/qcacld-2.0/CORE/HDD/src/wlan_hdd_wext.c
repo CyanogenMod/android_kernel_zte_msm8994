@@ -189,7 +189,7 @@ static const hdd_freq_chan_map_t freq_chan_map[] = { {2412, 1}, {2417, 2},
 #define WE_TXRX_FWSTATS_RESET           41
 #define WE_SET_MAX_TX_POWER_2_4   42
 #define WE_SET_MAX_TX_POWER_5_0   43
-#define WE_SET_POWER_GATING       44
+/* 44 is unused */
 /* Private ioctl for packet power save */
 #define  WE_PPS_PAID_MATCH              45
 #define  WE_PPS_GID_MATCH               46
@@ -272,7 +272,7 @@ static const hdd_freq_chan_map_t freq_chan_map[] = { {2412, 1}, {2417, 2},
 #define WE_GET_AMSDU         28
 #define WE_GET_TXPOW_2G      29
 #define WE_GET_TXPOW_5G      30
-#define WE_GET_POWER_GATING  31
+/* 31 is unused */
 #define WE_GET_PPS_PAID_MATCH           32
 #define WE_GET_PPS_GID_MATCH            33
 #define WE_GET_PPS_EARLY_TIM_CLEAR      34
@@ -6353,16 +6353,6 @@ static int iw_setint_getnone(struct net_device *dev, struct iw_request_info *inf
              break;
          }
 
-         case WE_SET_POWER_GATING:
-         {
-              hddLog(LOG1, "WMI_PDEV_PARAM_POWER_GATING_SLEEP val %d",
-                     set_value);
-              ret = process_wma_set_command((int)pAdapter->sessionId,
-                                        (int)WMI_PDEV_PARAM_POWER_GATING_SLEEP,
-                                        (set_value)? true:false, PDEV_CMD);
-              break;
-         }
-
          /* Firmware debug log */
          case WE_DBGLOG_LOG_LEVEL:
          {
@@ -7384,16 +7374,6 @@ static int iw_setnone_getint(struct net_device *dev, struct iw_request_info *inf
             break;
         }
 
-        case WE_GET_POWER_GATING:
-        {
-            hddLog(LOG1, "GET WMI_PDEV_PARAM_POWER_GATING_SLEEP");
-            *value = wma_cli_get_command(wmapvosContext,
-                                         (int)pAdapter->sessionId,
-                                        (int)WMI_PDEV_PARAM_POWER_GATING_SLEEP,
-                                        PDEV_CMD);
-            break;
-        }
-
 	case WE_GET_PPS_PAID_MATCH:
         {
             hddLog(LOG1, "GET WMI_VDEV_PPS_PAID_MATCH");
@@ -8312,6 +8292,13 @@ static int __iw_set_var_ints_getnone(struct net_device *dev,
         case WE_P2P_NOA_CMD:
             {
                 p2p_app_setP2pPs_t p2pNoA;
+
+                if (pAdapter->device_mode != WLAN_HDD_P2P_GO) {
+                    hddLog(LOGE,
+                        FL("Setting NoA is not allowed in Device mode: %d"),
+                        pAdapter->device_mode);
+                    return -EINVAL;
+                }
 
                 p2pNoA.opp_ps = apps_args[0];
                 p2pNoA.ctWindow = apps_args[1];
@@ -10336,6 +10323,7 @@ int iw_set_two_ints_getnone(struct net_device *dev,
     int *value = (int *)extra;
     int sub_cmd = value[0];
     int ret = 0;
+    hdd_context_t *hdd_ctx = WLAN_HDD_GET_CTX(pAdapter);
 
     if ((WLAN_HDD_GET_CTX(pAdapter))->isLogpInProgress) {
         VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_FATAL,
@@ -10355,6 +10343,10 @@ int iw_set_two_ints_getnone(struct net_device *dev,
         hddLog(LOGE, "WE_SET_FW_CRASH_INJECT: %d %d", value[1], value[2]);
         pr_err("SSR is triggered by iwpriv CRASH_INJECT: %d %d\n",
                                                 value[1], value[2]);
+        if (!hdd_ctx->cfg_ini->crash_inject_enabled) {
+            hddLog(LOGE, "Crash Inject ini disabled, Ignore Crash Inject");
+            return 0;
+        }
         ret = process_wma_set_command_twoargs((int) pAdapter->sessionId,
                                               (int) GEN_PARAM_CRASH_INJECT,
                                               value[1], value[2], GEN_CMD);
@@ -10722,11 +10714,6 @@ static const struct iw_priv_args we_private_args[] = {
         0,
         "txpow5g" },
 
-    {   WE_SET_POWER_GATING,
-        IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
-        0,
-        "pwrgating" },
-
     /* Sub-cmds DBGLOG specific commands */
     {   WE_DBGLOG_LOG_LEVEL ,
         IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
@@ -11076,11 +11063,6 @@ static const struct iw_priv_args we_private_args[] = {
         0,
         IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
         "get_txpow5g" },
-
-    {   WE_GET_POWER_GATING,
-        0,
-        IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
-        "get_pwrgating" },
 
     {   WE_GET_PPS_PAID_MATCH,
 	0,
