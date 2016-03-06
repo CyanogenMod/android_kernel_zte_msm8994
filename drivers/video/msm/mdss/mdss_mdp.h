@@ -1141,4 +1141,8 @@ int mdss_mdp_ctl_cmd_autorefresh_enable(struct mdss_mdp_ctl *ctl,
 		int frame_cnt);
 int mdss_mdp_user_pcc_config(struct mdp_pcc_cfg_data *config);
 
+#ifdef CONFIG_ZTEMT_LCD_DISP_ENHANCE
+//lcd color tmp adjust
+int zte_mdss_pcc_config(struct mdp_pcc_cfg_data *config);
+#endif
 #endif /* MDSS_MDP_H */

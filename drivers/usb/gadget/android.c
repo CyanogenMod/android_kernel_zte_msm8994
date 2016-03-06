@@ -35,6 +35,9 @@
 #include <linux/qcom/diag_dload.h>
 
 #include "gadget_chips.h"
+#ifdef CONFIG_ZTEMT_USB_CONFIGURATION
+#include <linux/regulator/consumer.h>
+#endif
 
 #include "f_fs.c"
 #ifdef CONFIG_SND_PCM
@@ -2434,11 +2437,23 @@ static int mass_storage_function_init(struct android_usb_function *f,
 		pr_err("Memory allocation failed.\n");
 		return -ENOMEM;
 	}
-
+#ifdef CONFIG_ZTEMT_USB_CONFIGURATION
+	config->fsg.nluns = 0;
+	if (dev->pdata && dev->pdata->internal_sdcard_support) {
+		config->fsg.luns[config->fsg.nluns].removable = 1;
+		snprintf(name[config->fsg.nluns], MAX_LUN_NAME, "intsd");
+		config->fsg.nluns++;
+	}
+	 if (dev->pdata && dev->pdata->external_sdcard_support) {
+		config->fsg.luns[config->fsg.nluns].removable = 1;
+		snprintf(name[config->fsg.nluns], MAX_LUN_NAME, "extsd");
+		config->fsg.nluns++;
+	}
+#else
 	config->fsg.nluns = 1;
 	snprintf(name[0], MAX_LUN_NAME, "lun");
 	config->fsg.luns[0].removable = 1;
-
+#endif
 	if (dev->pdata && dev->pdata->cdrom) {
 		config->fsg.luns[config->fsg.nluns].cdrom = 1;
 		config->fsg.luns[config->fsg.nluns].ro = 1;
@@ -2458,6 +2473,10 @@ static int mass_storage_function_init(struct android_usb_function *f,
 		config->fsg.luns[n].removable = 1;
 		config->fsg.nluns++;
 	}
+#ifdef CONFIG_ZTEMT_USB_CONFIGURATION
+			config->fsg.vendor_name = "nubia";
+			config->fsg.product_name = "Android";
+#endif
 
 	common = fsg_common_init(NULL, cdev, &config->fsg);
 	if (IS_ERR(common)) {
@@ -3849,6 +3868,287 @@ static int usb_diag_update_pid_and_serial_num(u32 pid, const char *snum)
 	return 0;
 }
 
+#ifdef CONFIG_ZTEMT_USB_CONFIGURATION
+/* Regulator utility functions */
+static int android_usb_vreg_init_reg(struct device *dev,
+					struct usb_reg_data *vreg)
+{
+	int ret = 0;
+
+	/* check if regulator is already initialized? */
+	if (vreg->reg)
+		goto out;
+
+	/* Get the regulator handle */
+	vreg->reg = devm_regulator_get(dev, vreg->name);
+	printk(KERN_ERR"ZTEMT:android usb get regulator=%s",vreg->name);
+	if (IS_ERR(vreg->reg)) {
+		ret = PTR_ERR(vreg->reg);
+		printk(KERN_ERR"%s: devm_regulator_get(%s) failed. ret=%d\n",
+			__func__, vreg->name, ret);
+		goto out;
+	}
+
+	if (regulator_count_voltages(vreg->reg) > 0) {
+		vreg->set_voltage_sup = true;
+		/* sanity check */
+		if (!vreg->high_vol_level || !vreg->hpm_uA) {
+			pr_err("%s: %s invalid constraints specified\n",
+			       __func__, vreg->name);
+			ret = -EINVAL;
+		}
+	}
+
+out:
+	return ret;
+}
+
+static void android_usb_vreg_deinit_reg(struct usb_reg_data *vreg)
+{
+	if (vreg->reg)
+		devm_regulator_put(vreg->reg);
+}
+
+static int android_usb_vreg_set_optimum_mode(struct usb_reg_data
+						  *vreg, int uA_load)
+{
+	int ret = 0;
+
+	/*
+	 * regulators that do not support regulator_set_voltage also
+	 * do not support regulator_set_optimum_mode
+	 */
+	if (vreg->set_voltage_sup) {
+		ret = regulator_set_optimum_mode(vreg->reg, uA_load);
+		if (ret < 0)
+			pr_err("%s: regulator_set_optimum_mode(reg=%s,uA_load=%d) failed. ret=%d\n",
+			       __func__, vreg->name, uA_load, ret);
+		else
+			/*
+			 * regulator_set_optimum_mode() can return non zero
+			 * value even for success case.
+			 */
+			ret = 0;
+	}
+	return ret;
+}
+
+static int android_usb_vreg_set_voltage(struct usb_reg_data *vreg,
+					int min_uV, int max_uV)
+{
+	int ret = 0;
+	if (vreg->set_voltage_sup) {
+		ret = regulator_set_voltage(vreg->reg, min_uV, max_uV);
+		if (ret) {
+			pr_err("%s: regulator_set_voltage(%s)failed. min_uV=%d,max_uV=%d,ret=%d\n",
+			       __func__, vreg->name, min_uV, max_uV, ret);
+		}
+	}
+
+	return ret;
+}
+
+static int android_usb_vreg_enable(struct usb_reg_data *vreg)
+{
+	int ret = 0;
+
+	/* Put regulator in HPM (high power mode) */
+	ret = android_usb_vreg_set_optimum_mode(vreg, vreg->hpm_uA);
+	if (ret < 0)
+		return ret;
+
+	if (!vreg->is_enabled) {
+		/* Set voltage level */
+		ret = android_usb_vreg_set_voltage(vreg, vreg->high_vol_level,
+						vreg->high_vol_level);
+		if (ret)
+			return ret;
+	}
+	ret = regulator_enable(vreg->reg);
+	if (ret) {
+		pr_err("%s: regulator_enable(%s) failed. ret=%d\n",
+				__func__, vreg->name, ret);
+		return ret;
+	}
+	vreg->is_enabled = true;
+	return ret;
+}
+
+static int android_usb_vreg_disable(struct usb_reg_data *vreg)
+{
+	int ret = 0;
+
+	/* Never disable regulator marked as always_on */
+	if (vreg->is_enabled && !vreg->is_always_on) {
+		ret = regulator_disable(vreg->reg);
+		if (ret) {
+			pr_err("%s: regulator_disable(%s) failed. ret=%d\n",
+				__func__, vreg->name, ret);
+			goto out;
+		}
+		vreg->is_enabled = false;
+
+		ret = android_usb_vreg_set_optimum_mode(vreg, 0);
+		if (ret < 0)
+			goto out;
+
+		/* Set min. voltage level to 0 */
+		ret = android_usb_vreg_set_voltage(vreg, 0, vreg->high_vol_level);
+		if (ret)
+			goto out;
+	} else if (vreg->is_enabled && vreg->is_always_on) {
+		if (vreg->lpm_sup) {
+			/* Put always_on regulator in LPM (low power mode) */
+			ret = android_usb_vreg_set_optimum_mode(vreg,
+							      vreg->lpm_uA);
+			if (ret < 0)
+				goto out;
+		}
+	}
+out:
+	return ret;
+}
+
+static int android_usb_setup_vreg(struct android_usb_platform_data *pdata,
+			bool enable, bool is_init)
+{
+	int ret = 0;
+	struct usb_reg_data *vreg_table;
+
+	vreg_table = pdata->vreg_data;
+	if(!vreg_table)
+		goto jump_out;
+	if (enable)
+		ret = android_usb_vreg_enable(vreg_table);
+	else
+		ret = android_usb_vreg_disable(vreg_table);
+	if (ret)
+		goto jump_out;
+	
+jump_out:
+	return ret;
+}
+
+/*
+ * Reset vreg by ensuring it is off during probe. A call
+ * to enable vreg is needed to balance disable vreg
+ */
+static int android_usb_vreg_reset(struct android_usb_platform_data *pdata)
+{
+	int ret;
+
+	ret = android_usb_setup_vreg(pdata, 1, true);
+	if (ret)
+		return ret;
+	ret = android_usb_setup_vreg(pdata, 0, true);
+	return ret;
+}
+#define MAX_PROP_SIZE 32
+
+static int android_usb_dt_parse_vreg_info(struct device *dev,
+		struct usb_reg_data  **vreg_data, const char *vreg_name)
+{
+	int len, ret = 0;
+	const __be32 *prop;
+	char prop_name[MAX_PROP_SIZE];
+	struct usb_reg_data *vreg;
+	struct device_node *np = dev->of_node;
+
+	snprintf(prop_name, MAX_PROP_SIZE, "%s-supply", vreg_name);
+	if (!of_parse_phandle(np, prop_name, 0)) {
+		dev_info(dev, "No vreg data found for %s\n", vreg_name);
+		return ret;
+	}
+
+	vreg = devm_kzalloc(dev, sizeof(*vreg), GFP_KERNEL);
+	if (!vreg) {
+		dev_err(dev, "No memory for vreg: %s\n", vreg_name);
+		ret = -ENOMEM;
+		return ret;
+	}
+
+	vreg->name = vreg_name;
+
+	snprintf(prop_name, MAX_PROP_SIZE,
+			"qcom,%s-always-on", vreg_name);
+	if (of_get_property(np, prop_name, NULL))
+		vreg->is_always_on = true;
+
+	snprintf(prop_name, MAX_PROP_SIZE,
+			"qcom,%s-lpm-sup", vreg_name);
+	if (of_get_property(np, prop_name, NULL))
+		vreg->lpm_sup = true;
+
+	snprintf(prop_name, MAX_PROP_SIZE,
+			"qcom,%s-voltage-level", vreg_name);
+	prop = of_get_property(np, prop_name, &len);
+	if (!prop || (len != (2 * sizeof(__be32)))) {
+		dev_warn(dev, "%s %s property\n",
+			prop ? "invalid format" : "no", prop_name);
+	} else {
+		vreg->low_vol_level = be32_to_cpup(&prop[0]);
+		vreg->high_vol_level = be32_to_cpup(&prop[1]);
+	}
+
+	snprintf(prop_name, MAX_PROP_SIZE,
+			"qcom,%s-current-level", vreg_name);
+	prop = of_get_property(np, prop_name, &len);
+	if (!prop || (len != (2 * sizeof(__be32)))) {
+		dev_warn(dev, "%s %s property\n",
+			prop ? "invalid format" : "no", prop_name);
+	} else {
+		vreg->lpm_uA = be32_to_cpup(&prop[0]);
+		vreg->hpm_uA = be32_to_cpup(&prop[1]);
+	}
+
+	*vreg_data = vreg;
+	printk(KERN_ERR"ZTEMT,%s: %s %s vol=[%d %d]uV, curr=[%d %d]uA\n",
+		vreg->name, vreg->is_always_on ? "always_on," : "",
+		vreg->lpm_sup ? "lpm_sup," : "", vreg->low_vol_level,
+		vreg->high_vol_level, vreg->lpm_uA, vreg->hpm_uA);
+
+	return ret;
+}
+/* This init function should be called only once for each SDHC slot */
+static int android_usb_vreg_init(struct device *dev,
+				struct android_usb_platform_data *pdata,
+				bool is_init)
+{
+	int ret = 0;
+	struct usb_reg_data *curr_vdd_reg;
+	
+	curr_vdd_reg = pdata->vreg_data;
+	if (!is_init)
+		/* Deregister all regulators from regulator framework */
+		goto vdd_reg_deinit;
+
+	/*
+	 * Get the regulator handle from voltage regulator framework
+	 * and then try to set the voltage level for the regulator
+	 */
+	 printk(KERN_ERR"ZTEMT:android_usb_vreg_init\r\n");
+	if (curr_vdd_reg) {
+		printk(KERN_ERR"ZTEMT:android_usb_vreg_init2\r\n");
+		ret = android_usb_vreg_init_reg(dev, curr_vdd_reg);
+		if (ret)
+			goto out;
+	}
+	ret = android_usb_vreg_reset(pdata);
+	if (ret)
+		printk(KERN_ERR"vreg reset failed (%d)\n", ret);
+	goto out;
+
+
+vdd_reg_deinit:
+	if (curr_vdd_reg)
+		android_usb_vreg_deinit_reg(curr_vdd_reg);
+out:
+	return ret;
+}
+
+
+
+#endif
 static int android_probe(struct platform_device *pdev)
 {
 	struct android_usb_platform_data *pdata;
@@ -3915,6 +4215,15 @@ static int android_probe(struct platform_device *pdev)
 		ret = of_property_read_u8(pdev->dev.of_node,
 				"qcom,android-usb-uicc-nluns",
 				&pdata->uicc_nluns);
+#ifdef CONFIG_ZTEMT_USB_CONFIGURATION
+        pdata->internal_sdcard_support=of_property_read_bool(pdev->dev.of_node,
+			"qcom,android-usb-internal_sdcard");
+		pdata->external_sdcard_support=of_property_read_bool(pdev->dev.of_node,
+			"qcom,android-usb-external_sdcard");
+	   if(android_usb_dt_parse_vreg_info(&pdev->dev,&pdata->vreg_data, "vdd")){
+			printk(KERN_ERR"ZTEMT:failed parsing vdd data\n");
+	    }	   
+#endif
 	} else {
 		pdata = pdev->dev.platform_data;
 	}
@@ -3996,6 +4305,18 @@ static int android_probe(struct platform_device *pdev)
 	}
 	strlcpy(android_dev->pm_qos, "high", sizeof(android_dev->pm_qos));
 
+#ifdef CONFIG_ZTEMT_USB_CONFIGURATION
+	/* Setup regulators */
+	ret = android_usb_vreg_init(&pdev->dev,pdata, true);
+	if (ret) {
+		dev_err(&pdev->dev, "ZTEMT:Regulator setup failed (%d)\n", ret);
+	}
+
+	ret = android_usb_setup_vreg(pdata, 1, true);
+
+	if (ret)
+		return ret;
+#endif
 	return ret;
 err_probe:
 	android_destroy_device(android_dev);
