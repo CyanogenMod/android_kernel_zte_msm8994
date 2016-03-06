@@ -53,3 +53,7 @@ obj-$(CONFIG_FB_MSM_MDSS) += mdss_fb.o mdss_util.o
 obj-$(CONFIG_COMPAT) += mdss_compat_utils.o
 
 obj-$(CONFIG_FB_MSM_MDSS) += mdss_livedisplay.o
+
+#obj-$(CONFIG_SII8620_MHL_TX) += Sii8620/
+obj-$(CONFIG_SII8620_MHL_TX) += Sii8620_103/
+obj-$(CONFIG_ZTEMT_LCD_DISP_ENHANCE) += zte_disp_enhance.o
