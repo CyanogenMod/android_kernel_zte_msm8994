@@ -1339,6 +1339,11 @@
 			};
 		};
 
+		qcom,leds@d300 {
+			/delete-property/ pmi8994_flash1;
+			/delete-property/ pmi8994_torch1;
+		}
+
 		qcom,leds@d800 {
 			status = "disabled";
 			qcom,led-strings-list = [00 01];
