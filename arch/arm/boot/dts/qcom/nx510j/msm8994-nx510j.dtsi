@@ -1339,6 +1339,11 @@
 			};
 		};
 
+		qcom,leds@d300 {
+			/delete-property/ qcom,flash_1;
+			/delete-property/ qcom,torch_1;
+		};
+
 		qcom,leds@d800 {
 			status = "disabled";
 			qcom,led-strings-list = [00 01];
